@@ -9,6 +9,8 @@ const TXT = {
   brand: '寻物启事',
   home: '首页',
   profile: '个人中心',
+  login: '登录',
+  register: '注册',
   logout: '退出登录',
 }
 
@@ -30,8 +32,14 @@ const logout = async () => {
       </div>
       <nav class="actions">
         <RouterLink class="link" to="/home">{{ TXT.home }}</RouterLink>
-        <RouterLink class="link" to="/profile">{{ TXT.profile }}</RouterLink>
-        <button class="link ghost" type="button" @click="logout">{{ TXT.logout }}</button>
+        <template v-if="authStore.isLoggedIn">
+          <RouterLink class="link" to="/profile">{{ TXT.profile }}</RouterLink>
+          <button class="link ghost" type="button" @click="logout">{{ TXT.logout }}</button>
+        </template>
+        <template v-else>
+          <RouterLink class="link" to="/login">{{ TXT.login }}</RouterLink>
+          <RouterLink class="link ghost" to="/register">{{ TXT.register }}</RouterLink>
+        </template>
       </nav>
     </header>
     <main id="main-content" class="content">

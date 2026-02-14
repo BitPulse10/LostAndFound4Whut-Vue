@@ -32,7 +32,7 @@ const isTokenValid = (token) => {
 const routes = [
   {
     path: '/',
-    redirect: () => (isTokenValid(sessionStorage.getItem(TOKEN_KEY)) ? '/home' : '/login'),
+    redirect: '/home',
   },
   {
     path: '/login',
@@ -50,7 +50,6 @@ const routes = [
     path: '/home',
     name: 'home',
     component: HomeView,
-    meta: { requiresAuth: true },
   },
   {
     path: '/profile',
@@ -85,7 +84,7 @@ router.beforeEach((to) => {
   }
 
   if (to.meta.guestOnly && tokenValid) {
-    return { name: 'profile' }
+    return { name: 'home' }
   }
 
   return true

@@ -9,6 +9,7 @@ const loading = ref(false)
 const error = ref('')
 const postCount = ref(0)
 const myPosts = ref([])
+const selectedPostType = ref('all')
 
 const detailOpen = ref(false)
 const detailLoading = ref(false)
@@ -22,6 +23,17 @@ const email = computed(() => authStore.user?.email || '-')
 const activeImageUrl = computed(() => detailImages.value[activeImageIndex.value] || '')
 const foundCount = computed(() => myPosts.value.filter((item) => item.type === 1).length)
 const lostCount = computed(() => myPosts.value.filter((item) => item.type === 0).length)
+const cardCount = computed(() => myPosts.value.filter((item) => item.type === 2).length)
+const postTypeOptions = [
+  { value: 'all', label: '全部' },
+  { value: 0, label: '失物' },
+  { value: 1, label: '招领' },
+  { value: 2, label: '卡证' },
+]
+const filteredPosts = computed(() => {
+  if (selectedPostType.value === 'all') return myPosts.value
+  return myPosts.value.filter((item) => item.type === selectedPostType.value)
+})
 
 const formatDate = (value) => {
   if (!value) return '-'
@@ -131,6 +143,13 @@ const loadProfile = async () => {
   }
 }
 
+const postTypeLabel = (type) => {
+  if (type === 1) return '招领'
+  if (type === 0) return '失物'
+  if (type === 2) return '卡证'
+  return '未知'
+}
+
 onMounted(async () => {
   window.addEventListener('keydown', onWindowKeydown)
   await loadProfile()
@@ -185,6 +204,10 @@ onBeforeUnmount(() => {
               <p class="stat-label">失物</p>
               <p class="stat">{{ lostCount }}</p>
             </div>
+            <div class="stat-block card-item">
+              <p class="stat-label">卡证</p>
+              <p class="stat">{{ cardCount }}</p>
+            </div>
           </div>
         </section>
         <section class="card">
@@ -197,14 +220,27 @@ onBeforeUnmount(() => {
       <section v-if="!loading && !error" class="post-panel">
         <div class="post-head">
           <h3>我的发帖</h3>
-          <p>共 {{ postCount }} 条</p>
+          <p>共 {{ filteredPosts.length }} / {{ postCount }} 条</p>
+        </div>
+        <div class="post-type-segmented" role="group" aria-label="我的帖子分类">
+          <button
+            v-for="opt in postTypeOptions"
+            :key="`profile-type-${opt.value}`"
+            type="button"
+            class="post-type-btn"
+            :class="{ active: selectedPostType === opt.value }"
+            @click="selectedPostType = opt.value"
+          >
+            {{ opt.label }}
+          </button>
         </div>
 
         <p v-if="!myPosts.length" class="muted">暂时还没有发布记录</p>
+        <p v-else-if="!filteredPosts.length" class="muted">当前分类暂无记录</p>
 
         <div v-else class="post-grid">
           <button
-            v-for="item in myPosts"
+            v-for="item in filteredPosts"
             :key="item.id"
             class="post-card"
             type="button"
@@ -217,7 +253,7 @@ onBeforeUnmount(() => {
             ></div>
             <div class="post-body">
               <p class="post-title">{{ item.description || '无标题物品' }}</p>
-              <p class="post-meta">{{ item.type === 1 ? '招领' : '挂失' }} · {{ item.eventPlace || '地点未填写' }}</p>
+              <p class="post-meta">{{ postTypeLabel(item.type) }} · {{ item.eventPlace || '地点未填写' }}</p>
               <p class="post-time">{{ formatDate(item.createdAt || item.eventTime) }}</p>
             </div>
           </button>
@@ -260,6 +296,9 @@ onBeforeUnmount(() => {
 
             <div v-if="detailItem && !detailLoading && !detailError" class="detail-right">
               <p class="drawer-desc">{{ detailItem.description || '暂无描述' }}</p>
+              <div v-if="Array.isArray(detailItem.tags) && detailItem.tags.length" class="detail-tags">
+                <span v-for="tag in detailItem.tags" :key="`detail-tag-${tag}`" class="detail-tag">#{{ tag }}</span>
+              </div>
               <dl class="detail-meta">
                 <div>
                   <dt>发布者</dt>
@@ -393,7 +432,7 @@ dd {
 
 .stats {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 0.55rem;
   border: 1px solid #d5dfec;
   border-radius: 14px;
@@ -453,6 +492,10 @@ dd {
   background: #f59e0b;
 }
 
+.stat-block.card-item::after {
+  background: #2563eb;
+}
+
 .stat-block:hover {
   transform: translateY(-1px);
   box-shadow: 0 12px 22px rgba(29, 50, 92, 0.12);
@@ -497,6 +540,41 @@ dd {
   margin: 0;
   color: var(--text-secondary);
   font-size: 0.85rem;
+}
+
+.post-type-segmented {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border: 1px solid #d7dee8;
+  border-radius: 999px;
+  padding: 0.25rem;
+  width: fit-content;
+}
+
+.post-type-btn {
+  border: none;
+  background: transparent;
+  color: #334155;
+  border-radius: 999px;
+  padding: 0.38rem 0.8rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.post-type-btn:hover {
+  background: #eef2f9;
+}
+
+.post-type-btn.active {
+  background: #1d4ed8;
+  color: #ffffff;
+}
+
+.post-type-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(29, 78, 216, 0.22);
 }
 
 .post-grid {
@@ -696,6 +774,24 @@ dd {
   line-height: 1.7;
   color: var(--text-primary);
   overflow-wrap: anywhere;
+}
+
+.detail-tags {
+  margin-top: 0.75rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.detail-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.58rem;
+  border-radius: 999px;
+  border: 1px solid #ced7e6;
+  background: #f7f9fd;
+  color: #1a2a44;
+  font-size: 0.74rem;
 }
 
 .detail-meta {
