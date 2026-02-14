@@ -32,6 +32,7 @@ const pageCount = computed(() => {
 
 const canPrev = computed(() => props.pageNo > 1)
 const canNext = computed(() => props.pageNo < pageCount.value)
+const TAG_VIRTUAL_THRESHOLD = 120
 const TAG_COLUMNS = 2
 const TAG_ROW_SIZE = 42
 const TAG_OVERSCAN = 3
@@ -39,6 +40,7 @@ const tagViewportRef = ref(null)
 const tagScrollTop = ref(0)
 const tagViewportHeight = ref(320)
 let tagViewportResizeObserver = null
+const isTagVirtualized = computed(() => props.records.length > TAG_VIRTUAL_THRESHOLD)
 
 const onPrevPage = () => {
   if (!canPrev.value) return
@@ -183,9 +185,22 @@ onBeforeUnmount(() => {
 
       <p class="meta">共 {{ total }} 个标签</p>
 
-      <div ref="tagViewportRef" class="tag-list" role="listbox" aria-label="标签列表" @scroll="onTagListScroll">
+      <div ref="tagViewportRef" class="tag-list" aria-label="标签列表" @scroll="onTagListScroll">
         <p v-if="loading" class="state">加载中…</p>
         <p v-else-if="!records.length" class="state">暂无标签</p>
+        <div v-else-if="!isTagVirtualized" class="tag-list-grid">
+          <button
+            v-for="tag in records"
+            :key="`tag-${tag.id ?? tag.name}`"
+            class="tag-item"
+            :class="{ active: pendingTags.includes(tag.name) }"
+            type="button"
+            :aria-pressed="pendingTags.includes(tag.name)"
+            @click="onTagClick(tag.name)"
+          >
+            #{{ tag.name }}
+          </button>
+        </div>
         <div v-else class="tag-virtual-list">
           <div class="tag-spacer" :style="{ height: `${tagTopSpacerHeight}px` }" aria-hidden="true"></div>
           <div v-for="row in visibleTagRows" :key="`tag-row-${row.rowIndex}`" class="tag-row">
@@ -195,6 +210,7 @@ onBeforeUnmount(() => {
               class="tag-item"
               :class="{ active: pendingTags.includes(tag.name) }"
               type="button"
+              :aria-pressed="pendingTags.includes(tag.name)"
               @click="onTagClick(tag.name)"
             >
               #{{ tag.name }}
@@ -246,9 +262,9 @@ onBeforeUnmount(() => {
 
 .collapse-handle {
   position: relative;
-  height: 3.8rem;
-  width: 3rem;
-  border-radius: 14px;
+  height: 4.5rem;
+  width: 3.5rem;
+  border-radius: 16px;
   border: 1px solid #cfd9e7;
   background: #ffffff;
   cursor: pointer;
@@ -264,13 +280,13 @@ onBeforeUnmount(() => {
 }
 
 .icon {
-  font-size: 1.05rem;
+  font-size: 1.2rem;
   font-weight: 700;
   line-height: 1;
 }
 
 .label {
-  font-size: 0.78rem;
+  font-size: 0.86rem;
   color: #475569;
   line-height: 1;
 }
@@ -408,6 +424,12 @@ onBeforeUnmount(() => {
 .tag-virtual-list {
   display: grid;
   gap: 0;
+}
+
+.tag-list-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.45rem;
 }
 
 .tag-row {

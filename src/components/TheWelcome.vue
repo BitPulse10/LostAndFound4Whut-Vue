@@ -44,8 +44,7 @@ const openReadmeInEditor = () => fetch('/__open-in-editor?file=README.md')
     <br />
 
     More instructions are available in
-    <a href="javascript:void(0)" @click="openReadmeInEditor"><code>README.md</code></a
-    >.
+    <button type="button" class="readme-link" @click="openReadmeInEditor"><code>README.md</code></button>.
   </WelcomeItem>
 
   <WelcomeItem>
@@ -93,3 +92,20 @@ const openReadmeInEditor = () => fetch('/__open-in-editor?file=README.md')
     <a href="https://vuejs.org/sponsor/" target="_blank" rel="noopener">becoming a sponsor</a>.
   </WelcomeItem>
 </template>
+
+<style scoped>
+.readme-link {
+  border: none;
+  background: transparent;
+  color: #2563eb;
+  cursor: pointer;
+  padding: 0;
+  font: inherit;
+  text-decoration: underline;
+}
+
+.readme-link:focus-visible {
+  outline: 2px solid rgba(37, 99, 235, 0.35);
+  outline-offset: 2px;
+}
+</style>

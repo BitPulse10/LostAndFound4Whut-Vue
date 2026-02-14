@@ -6,7 +6,7 @@ const router = useRouter()
 const authStore = useAuthStore()
 
 const TXT = {
-  brand: '寻物启事',
+  brand: '武理智寻',
   home: '首页',
   profile: '个人中心',
   login: '登录',
@@ -74,9 +74,21 @@ const logout = async () => {
 .logo {
   width: 42px;
   height: 42px;
-  border-radius: 12px;
-  background: linear-gradient(135deg, #0f172a 0%, #2563eb 100%);
-  box-shadow: 0 10px 24px rgba(37, 99, 235, 0.18);
+  border-radius: 10px;
+  background: #1d4ed8;
+  box-shadow: 0 10px 22px rgba(29, 78, 216, 0.22);
+  position: relative;
+}
+
+.logo::after {
+  content: '';
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.85);
 }
 
 .brand h1 {
