@@ -1,0 +1,10 @@
+{
+  "assessment_round": 2,
+  "focus": "兼容性评估",
+  "checks": [
+    "auth store 初始化读取来源需同步改为 sessionStorage",
+    "http refresh 读取/写入 refresh_token 需同步改为 sessionStorage",
+    "router 清理逻辑需同步清理 sessionStorage 键"
+  ],
+  "result": "无接口协议变化，仅存储介质变更，对后端零影响"
+}

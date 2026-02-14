@@ -1,0 +1,14 @@
+{
+  "assessment_round": 3,
+  "focus": "风险与验证评估",
+  "risks": [
+    "浏览器关闭后 refresh_token 丢失，自动续期体验下降（可接受）",
+    "跨标签页状态同步依赖 sessionStorage（与当前 access_token 语义一致）"
+  ],
+  "mitigation": [
+    "保持 setAuthState 单点写入",
+    "保持 clearAuthState 单点清理",
+    "执行 npm run build 验证打包与引用"
+  ],
+  "go_no_go": "GO"
+}

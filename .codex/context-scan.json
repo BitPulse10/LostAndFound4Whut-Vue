@@ -1,0 +1,27 @@
+{
+  "task": "第2点修复与改进：前端会话存储策略优化（向 cookie/session 优先靠拢）",
+  "scope": [
+    "src/stores/auth.js",
+    "src/services/http.js",
+    "src/router/index.js"
+  ],
+  "current_state": {
+    "access_token": "sessionStorage",
+    "refresh_token": "localStorage",
+    "user_profile_cache": "localStorage"
+  },
+  "similar_patterns": [
+    "http.js 已有统一清理 clearAuthState",
+    "router/index.js 已有登录态检查与过期清理",
+    "stores/auth.js 已有 setAuthState 单点写入"
+  ],
+  "tests": {
+    "available": ["npm run build"],
+    "strategy": "改动后执行构建与静态检查路径验证"
+  },
+  "observations": [
+    "refresh token 与用户资料仍是持久化存储，XSS 风险窗口较长",
+    "现有代码结构具备集中改造条件，改动可控",
+    "完全 cookie 化需要后端协同，本轮先做前端低风险收敛"
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "assessment_round": 1,
+  "focus": "可行性评估",
+  "options": [
+    {
+      "name": "A: 完全迁移到 httpOnly cookie",
+      "frontend_effort": "中",
+      "backend_effort": "中-高",
+      "success_rate": "高(需联调)",
+      "this_round": "不采用，超出本轮前端改造边界"
+    },
+    {
+      "name": "B: refresh_token 与 user 缓存改为 sessionStorage",
+      "frontend_effort": "低",
+      "backend_effort": "无",
+      "success_rate": "高",
+      "this_round": "采用"
+    }
+  ],
+  "decision": "采用 B，先减少持久化暴露面，再为后续 cookie 化预留空间"
+}
