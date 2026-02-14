@@ -48,7 +48,7 @@ const submit = async () => {
       email,
       password: form.password,
     })
-    const redirect = route.query.redirect || '/profile'
+    const redirect = route.query.redirect || '/home'
     router.push(redirect)
   } catch (error) {
     errorMessage.value = error?.message || '登录失败，请稍后重试。'
