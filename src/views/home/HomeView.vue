@@ -1,6 +1,6 @@
 ﻿<script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import AppShell from '../../layouts/AppShell.vue'
 import SoftPanel from '../../components/base/SoftPanel.vue'
 import TagFilterSidebar from '../../components/home/TagFilterSidebar.vue'
@@ -58,6 +58,7 @@ const timeOptions = [
 
 const TOKEN_KEY = 'laf_token'
 const router = useRouter()
+const route = useRoute()
 
 const selectedType = ref(1)
 const selectedTime = ref('all')
@@ -81,6 +82,54 @@ const pageNo = ref(1)
 const pageSize = ref(20)
 const totalItems = ref(0)
 const imageOnly = ref(false)
+const syncingFromRoute = ref(false)
+
+const parsePositiveInt = (value, fallback) => {
+  const parsed = Number.parseInt(value, 10)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
+}
+
+const parseTypeFromQuery = (value) => {
+  if (value === 'card') return 'card'
+  if (value === '0') return 0
+  if (value === '1') return 1
+  return 1
+}
+
+const applyQueryState = (query) => {
+  syncingFromRoute.value = true
+  selectedType.value = parseTypeFromQuery(query?.type)
+  selectedTime.value = query?.time === 'day' || query?.time === 'week' ? query.time : 'all'
+  searchText.value = typeof query?.q === 'string' ? query.q : ''
+  pageNo.value = parsePositiveInt(query?.page, 1)
+  pageSize.value = parsePositiveInt(query?.size, 20)
+  tagPageNo.value = parsePositiveInt(query?.tagPage, 1)
+  tagPageSize.value = parsePositiveInt(query?.tagSize, 20)
+  sidebarCollapsed.value = query?.sidebar !== 'open'
+  syncingFromRoute.value = false
+}
+
+const buildQueryState = () => {
+  const query = {}
+  if (selectedType.value !== 1) query.type = String(selectedType.value)
+  if (selectedTime.value !== 'all') query.time = selectedTime.value
+  if (searchText.value.trim()) query.q = searchText.value.trim()
+  if (pageNo.value !== 1) query.page = String(pageNo.value)
+  if (pageSize.value !== 20) query.size = String(pageSize.value)
+  if (tagPageNo.value !== 1) query.tagPage = String(tagPageNo.value)
+  if (tagPageSize.value !== 20) query.tagSize = String(tagPageSize.value)
+  if (!sidebarCollapsed.value) query.sidebar = 'open'
+  return query
+}
+
+const syncQueryState = () => {
+  if (syncingFromRoute.value) return
+  const nextQuery = buildQueryState()
+  const current = JSON.stringify(route.query || {})
+  const next = JSON.stringify(nextQuery)
+  if (current === next) return
+  router.replace({ query: nextQuery })
+}
 
 const heroTitle = computed(() => {
   if (selectedType.value === 1) return TXT.foundTitle
@@ -102,20 +151,29 @@ const emptyMessage = computed(() => {
 const itemPageCount = computed(() => Math.max(1, Math.ceil(totalItems.value / pageSize.value)))
 const canPrevItemPage = computed(() => pageNo.value > 1)
 const canNextItemPage = computed(() => pageNo.value < itemPageCount.value)
-const CARD_VIRTUAL_THRESHOLD = 50
+const CARD_VIRTUAL_THRESHOLD = 120
 const CARD_OVERSCAN_ROWS = 2
 const cardViewportRef = ref(null)
 const cardScrollTop = ref(0)
 const cardViewportWidth = ref(0)
 const cardViewportHeight = ref(620)
 let cardViewportResizeObserver = null
-const isCardVirtualized = computed(() => items.value.length > CARD_VIRTUAL_THRESHOLD || pageSize.value > CARD_VIRTUAL_THRESHOLD)
+const isCardVirtualized = computed(() => items.value.length > CARD_VIRTUAL_THRESHOLD)
 const cardColumnGapPx = computed(() => (imageOnly.value ? 10 : 13))
+const cardMinWidth = computed(() => {
+  if (imageOnly.value) return 170
+  if (pageSize.value >= 100) return 170
+  if (pageSize.value >= 40) return 200
+  if (pageSize.value <= 12) return 260
+  return 230
+})
 const cardColumns = computed(() => {
-  const width = cardViewportWidth.value || 0
+  const width =
+    cardViewportWidth.value ||
+    cardViewportRef.value?.clientWidth ||
+    (typeof window !== 'undefined' ? Math.floor(window.innerWidth * 0.72) : 0)
   if (width <= 640) return 1
-  const minWidth = imageOnly.value ? 170 : width <= 960 ? 200 : 230
-  return Math.max(1, Math.floor((width + cardColumnGapPx.value) / (minWidth + cardColumnGapPx.value)))
+  return Math.max(1, Math.floor((width + cardColumnGapPx.value) / (cardMinWidth.value + cardColumnGapPx.value)))
 })
 const cardRowSize = computed(() => (imageOnly.value ? 292 : 402))
 const cardRows = computed(() => {
@@ -551,6 +609,7 @@ const bindCardViewportObserver = () => {
 
 let searchTimer
 let tagSearchTimer
+applyQueryState(route.query)
 watch([selectedType, selectedTime], () => fetchItems(true))
 watch(searchText, () => {
   clearTimeout(searchTimer)
@@ -567,6 +626,18 @@ watch(tagSearchText, () => {
 watch([tagPageNo, tagPageSize], () => {
   fetchTagOptions()
 })
+watch(
+  () => route.query,
+  (nextQuery) => {
+    applyQueryState(nextQuery)
+  },
+)
+watch(
+  [selectedType, selectedTime, searchText, pageNo, pageSize, tagPageNo, tagPageSize, sidebarCollapsed],
+  () => {
+    syncQueryState()
+  },
+)
 watch([items, pageSize, imageOnly], async () => {
   await nextTick()
   resetCardVirtualScroll()
@@ -617,6 +688,23 @@ onBeforeUnmount(() => {
           <h2>{{ heroTitle }}</h2>
           <p class="hint">{{ heroSubtitle }}</p>
         </div>
+        <div class="hero-search-bridge">
+          <input
+            ref="imageInputRef"
+            type="file"
+            accept="image/*"
+            class="hidden-input"
+            aria-label="图片搜索"
+            @change="triggerImageSearch"
+          />
+          <button class="hero-image-search" type="button" @click="handleOpenImagePicker">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">
+              <path d="M4.5 8.5a2 2 0 0 1 2-2h2l1-1.6c.2-.33.56-.54.95-.54h3.1c.39 0 .75.21.95.54l1 1.6h2a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-11a2 2 0 0 1-2-2v-8Z"></path>
+              <circle cx="12" cy="12.5" r="3.2"></circle>
+            </svg>
+            <span>{{ TXT.imageSearch }}</span>
+          </button>
+        </div>
         <div class="hero-tools">
           <input
             v-model="searchText"
@@ -643,29 +731,29 @@ onBeforeUnmount(() => {
                 {{ opt.label }}
               </button>
             </div>
-            <div class="select-wrap">
-              <select
-                :value="selectedTime"
-                class="time-select"
-                name="timeRange"
-                aria-label="时间范围"
-                @change="handleTimeChange"
-              >
-                <option v-for="opt in timeOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-              </select>
-              <span class="select-caret"></span>
+            <div class="controls-right">
+              <div class="select-wrap">
+                <select
+                  :value="selectedTime"
+                  class="time-select"
+                  name="timeRange"
+                  aria-label="时间范围"
+                  @change="handleTimeChange"
+                >
+                  <option v-for="opt in timeOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+                </select>
+                <span class="select-caret"></span>
+              </div>
+              <label class="top-page-size-label">
+                {{ TXT.pageSize }}
+                <select class="top-page-size" :value="pageSize" @change="handleItemPageSizeChange">
+                  <option :value="12">12</option>
+                  <option :value="20">20</option>
+                  <option :value="40">40</option>
+                  <option :value="100">100</option>
+                </select>
+              </label>
             </div>
-            <input
-              ref="imageInputRef"
-              type="file"
-              accept="image/*"
-              class="hidden-input"
-              aria-label="图片搜索"
-              @change="triggerImageSearch"
-            />
-            <button class="image-search" type="button" @click="handleOpenImagePicker">
-              {{ TXT.imageSearch }}
-            </button>
           </div>
           <p v-if="recognizedTags.length" class="tag-hint">
             {{ TXT.imageHint }}：
@@ -679,7 +767,12 @@ onBeforeUnmount(() => {
           <p v-else-if="error" class="error" role="alert" aria-live="polite">{{ error }}</p>
           <p v-else-if="!items.length" class="muted" role="status" aria-live="polite">{{ emptyMessage }}</p>
 
-          <div v-else-if="!isCardVirtualized" class="card-grid" :class="{ 'image-only': imageOnly }">
+          <div
+            v-else-if="!isCardVirtualized"
+            class="card-grid"
+            :class="{ 'image-only': imageOnly }"
+            :style="{ '--card-min-width': `${cardMinWidth}px` }"
+          >
             <button
               v-for="item in items"
               :key="item.id"
@@ -703,7 +796,7 @@ onBeforeUnmount(() => {
             </button>
           </div>
 
-          <div v-else ref="cardViewportRef" class="card-viewport" @scroll="onCardViewportScroll">
+          <div v-else ref="cardViewportRef" class="card-viewport" :style="{ '--card-min-width': `${cardMinWidth}px` }" @scroll="onCardViewportScroll">
             <div class="card-virtual-space" :style="{ height: `${cardVirtualTotalHeight}px` }">
               <div class="card-virtual-content" :class="{ 'image-only': imageOnly }" :style="{ transform: `translateY(${cardVirtualOffset}px)` }">
                 <div
@@ -747,15 +840,6 @@ onBeforeUnmount(() => {
             <button class="pager-btn" type="button" :disabled="!canNextItemPage" @click="handleItemNextPage">
               {{ TXT.nextPage }}
             </button>
-            <label class="pager-size-label">
-              {{ TXT.pageSize }}
-              <select class="pager-size" :value="pageSize" @change="handleItemPageSizeChange">
-                <option :value="12">12</option>
-                <option :value="20">20</option>
-                <option :value="40">40</option>
-                <option :value="100">100</option>
-              </select>
-            </label>
           </div>
         </SoftPanel>
       </section>
@@ -790,10 +874,11 @@ onBeforeUnmount(() => {
         :title="imageOnly ? TXT.imageOnlyOff : TXT.imageOnlyOn"
         @click="handleToggleImageOnly"
       >
-        <span class="fab-icon" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="currentColor">
-            <circle cx="9" cy="9" r="2.2"></circle>
-            <path d="M4 6.5a2.5 2.5 0 0 1 2.5-2.5h11a2.5 2.5 0 0 1 2.5 2.5v11a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 17.5v-11Zm2.5-.5a.5.5 0 0 0-.5.5v10.6l4.1-4.2a1.3 1.3 0 0 1 1.9 0l3.2 3.3 2.2-2.2a1.3 1.3 0 0 1 1.9 0l1.7 1.8V6.5a.5.5 0 0 0-.5-.5h-11Z"></path>
+        <span class="fab-icon image-toggle-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.05" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="4.2" y="5.2" width="15.6" height="13.6" rx="2.2"></rect>
+            <circle cx="9.2" cy="10.1" r="1.7"></circle>
+            <path d="M6.6 16.1l3.5-3.5 2.7 2.7 2-2 2.6 2.8"></path>
           </svg>
         </span>
       </button>
@@ -883,9 +968,9 @@ onBeforeUnmount(() => {
 
 .hero {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 1.6rem;
-  align-items: stretch;
+  grid-template-columns: minmax(260px, 0.9fr) auto minmax(540px, 1.1fr);
+  gap: 0.8rem;
+  align-items: center;
 }
 
 .hero-kicker {
@@ -906,6 +991,48 @@ onBeforeUnmount(() => {
   color: var(--text-secondary);
   font-size: 1rem;
   max-width: 36ch;
+}
+
+.hero-search-bridge {
+  justify-self: center;
+}
+
+.hero-image-search {
+  width: clamp(100px, 10.2vw, 132px);
+  height: clamp(100px, 10.2vw, 132px);
+  border-radius: 18px;
+  border: 1.5px solid #b9cbef;
+  background: #2f69e3;
+  color: #ffffff;
+  box-shadow: 0 12px 22px rgba(47, 105, 227, 0.2);
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 0.48rem;
+  cursor: pointer;
+  transition: transform 140ms ease, box-shadow 140ms ease, background-color 140ms ease;
+}
+
+.hero-image-search svg {
+  width: 1.62rem;
+  height: 1.62rem;
+}
+
+.hero-image-search span {
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.hero-image-search:hover {
+  transform: translateY(-1px);
+  background: #3a75ee;
+  box-shadow: 0 16px 26px rgba(58, 117, 238, 0.24);
+}
+
+.hero-image-search:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(82, 133, 236, 0.26), 0 12px 22px rgba(47, 105, 227, 0.2);
 }
 
 .hero-tools {
@@ -935,23 +1062,30 @@ onBeforeUnmount(() => {
 
 .controls {
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: auto 1fr;
   gap: 0.7rem;
   align-items: center;
+}
+
+.controls-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  justify-self: start;
 }
 
 .segmented {
   --seg-bg: #eef3fa;
   --seg-border: #cfd9e7;
-  --seg-shadow: 0 8px 20px rgba(20, 30, 56, 0.08);
+  --seg-shadow: 0 6px 14px rgba(20, 30, 56, 0.08);
   display: inline-flex;
   align-items: center;
-  gap: 0.18rem;
+  gap: 0.14rem;
   width: fit-content;
   justify-self: start;
   background: var(--seg-bg);
   border-radius: 999px;
-  padding: 0.2rem;
+  padding: 0.18rem;
   border: 1px solid var(--seg-border);
   box-shadow: var(--seg-shadow);
 }
@@ -959,12 +1093,16 @@ onBeforeUnmount(() => {
 .seg-btn {
   border: none;
   background: transparent;
-  padding: 0.5rem 1rem;
+  min-height: 42px;
+  min-width: 56px;
+  padding: 0 0.92rem;
   border-radius: 999px;
   cursor: pointer;
   font-size: 0.82rem;
   font-weight: 600;
   letter-spacing: 0.01em;
+  line-height: 1;
+  white-space: nowrap;
   color: #44536e;
   transition: color 0.18s ease, background-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
 }
@@ -988,14 +1126,16 @@ onBeforeUnmount(() => {
 
 .select-wrap {
   position: relative;
+  width: 168px;
 }
 
 .time-select {
-  width: 100%;
+  width: 168px;
+  min-height: 42px;
   appearance: none;
   border-radius: 999px;
   border: 1px solid #d7dee8;
-  padding: 0.52rem 2.2rem 0.52rem 0.9rem;
+  padding: 0 2.1rem 0 0.92rem;
   font-size: 0.84rem;
   background: #f7f9fc;
   color: var(--text-primary);
@@ -1020,26 +1160,27 @@ onBeforeUnmount(() => {
   pointer-events: none;
 }
 
-.image-search {
-  border-radius: 999px;
-  padding: 0.55rem 1rem;
-  border: none;
-  background: var(--accent);
-  color: #ffffff;
-  cursor: pointer;
-  font-size: 0.82rem;
-  letter-spacing: 0.02em;
-  text-transform: none;
-  text-align: center;
+.top-page-size-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: #475569;
+  font-size: 0.76rem;
   white-space: nowrap;
+  min-height: 42px;
+  padding: 0 0.36rem 0 0.72rem;
+  border: 1px solid #d7dee8;
+  border-radius: 999px;
+  background: #f7f9fc;
 }
 
-.image-search:focus-visible {
-  box-shadow: 0 0 0 3px var(--focus-ring);
-}
-
-.image-search:hover {
-  background: var(--accent-hover);
+.top-page-size {
+  min-height: 32px;
+  border: 1px solid #cfd9e7;
+  background: #fff;
+  border-radius: 999px;
+  padding: 0 0.5rem;
+  font-size: 0.78rem;
 }
 
 .hidden-input {
@@ -1063,12 +1204,11 @@ onBeforeUnmount(() => {
 
 .card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(var(--card-min-width, 230px), 1fr));
   gap: 0.8rem;
 }
 
 .card-grid.image-only {
-  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
   gap: 0.6rem;
 }
 
@@ -1213,21 +1353,6 @@ onBeforeUnmount(() => {
   color: #475569;
   min-width: 4.6rem;
   text-align: center;
-}
-
-.pager-size-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  font-size: 0.78rem;
-  color: #475569;
-}
-
-.pager-size {
-  border: 1px solid #cfd9e7;
-  background: #fff;
-  border-radius: 8px;
-  padding: 0.2rem 0.35rem;
 }
 
 .muted {
@@ -1414,12 +1539,34 @@ onBeforeUnmount(() => {
     grid-template-columns: 1fr;
   }
 
+  .hero-search-bridge {
+    justify-self: start;
+  }
+
+  .hero-image-search {
+    width: 100%;
+    max-width: 180px;
+    height: 46px;
+    border-radius: 12px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+  }
+
   .controls {
     grid-template-columns: 1fr;
   }
 
-  .card-grid {
-    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  .controls-right {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 1fr auto;
+  }
+
+  .select-wrap,
+  .time-select {
+    width: 100%;
   }
 
   .detail-content {
@@ -1446,7 +1593,7 @@ onBeforeUnmount(() => {
   bottom: 1.6rem;
   display: grid;
   gap: 0.6rem;
-  z-index: 60;
+  z-index: 90;
 }
 
 .fab-btn {
@@ -1483,6 +1630,11 @@ onBeforeUnmount(() => {
 .fab-icon svg {
   width: 1.2rem;
   height: 1.2rem;
+}
+
+.fab-icon.image-toggle-icon svg {
+  width: 1.34rem;
+  height: 1.34rem;
 }
 
 .fab-btn:hover {

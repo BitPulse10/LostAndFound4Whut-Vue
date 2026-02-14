@@ -23,3 +23,7 @@ export function recognizeImageTagsApi(file) {
 export function getImageUrlApi(imageId) {
   return http.get(`/images/url/${imageId}`)
 }
+
+export function listMyItemsApi(params) {
+  return http.get('/items/me', { params })
+}

@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import AppShell from '../../layouts/AppShell.vue'
 import SoftPanel from '../../components/base/SoftPanel.vue'
 import BaseButton from '../../components/base/BaseButton.vue'
-import { getItemByIdApi } from '../../services/item.api'
+import { getItemDetailByIdApi } from '../../services/item.api'
 
 const route = useRoute()
 const router = useRouter()
@@ -26,6 +26,7 @@ const item = ref(null)
 const typeText = computed(() => {
   if (item.value?.type === 1) return '招领'
   if (item.value?.type === 0) return '挂失'
+  if (item.value?.type === 2) return '卡证'
   return '未分类'
 })
 
@@ -58,7 +59,7 @@ const fetchItem = async () => {
   loading.value = true
   error.value = ''
   try {
-    item.value = await getItemByIdApi(id)
+    item.value = await getItemDetailByIdApi(id)
   } catch (err) {
     error.value = err?.message || '加载详情失败'
   } finally {

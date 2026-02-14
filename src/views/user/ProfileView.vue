@@ -2,14 +2,21 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import AppShell from '../../layouts/AppShell.vue'
 import { useAuthStore } from '../../stores/auth'
-import { filterItemsApi, getItemDetailByIdApi } from '../../services/item.api'
+import { filterItemsApi, getItemDetailByIdApi, listMyItemsApi } from '../../services/item.api'
 
 const authStore = useAuthStore()
-const loading = ref(false)
+const profileLoading = ref(false)
+const postsLoading = ref(false)
 const error = ref('')
+const postError = ref('')
 const postCount = ref(0)
 const myPosts = ref([])
 const selectedPostType = ref('all')
+const postKeyword = ref('')
+const postPageNo = ref(1)
+const postPageSize = ref(20)
+const postPageTotal = ref(0)
+let postSearchTimer
 
 const detailOpen = ref(false)
 const detailLoading = ref(false)
@@ -21,18 +28,24 @@ const activeImageIndex = ref(0)
 const nickname = computed(() => authStore.user?.nickname || '未设置昵称')
 const email = computed(() => authStore.user?.email || '-')
 const activeImageUrl = computed(() => detailImages.value[activeImageIndex.value] || '')
-const foundCount = computed(() => myPosts.value.filter((item) => item.type === 1).length)
-const lostCount = computed(() => myPosts.value.filter((item) => item.type === 0).length)
-const cardCount = computed(() => myPosts.value.filter((item) => item.type === 2).length)
+const foundCount = ref(0)
+const lostCount = ref(0)
+const cardCount = ref(0)
 const postTypeOptions = [
   { value: 'all', label: '全部' },
   { value: 0, label: '失物' },
   { value: 1, label: '招领' },
   { value: 2, label: '卡证' },
 ]
-const filteredPosts = computed(() => {
-  if (selectedPostType.value === 'all') return myPosts.value
-  return myPosts.value.filter((item) => item.type === selectedPostType.value)
+const filteredPosts = computed(() => myPosts.value)
+const postPageCount = computed(() => Math.max(1, Math.ceil(postPageTotal.value / postPageSize.value)))
+const canPrevPostPage = computed(() => postPageNo.value > 1)
+const canNextPostPage = computed(() => postPageNo.value < postPageCount.value)
+const postCardMinWidth = computed(() => {
+  if (postPageSize.value >= 100) return 170
+  if (postPageSize.value >= 40) return 200
+  if (postPageSize.value <= 12) return 260
+  return 230
 })
 
 const formatDate = (value) => {
@@ -125,22 +138,128 @@ const onWindowKeydown = (event) => {
   if (event.key === 'ArrowRight' && detailOpen.value) nextImage()
 }
 
-const loadProfile = async () => {
-  loading.value = true
+const loadProfileLegacy = async () => {
+  const allRecords = []
+  let currentPage = 1
+  let total = 0
+  do {
+    const data = await filterItemsApi({ pageNo: currentPage, pageSize: 100 })
+    const pageRecords = Array.isArray(data?.records) ? data.records : []
+    total = Number(data?.total || 0)
+    allRecords.push(...pageRecords)
+    currentPage += 1
+  } while (allRecords.length < total)
+
+  const id = authStore.user?.id
+  const mine = allRecords.filter((x) => x.userId === id || x.publisher?.id === id)
+  const typed = selectedPostType.value === 'all' ? mine : mine.filter((item) => item.type === selectedPostType.value)
+  const keyword = postKeyword.value.trim().toLowerCase()
+  const filtered = keyword
+    ? typed.filter((item) => {
+        const desc = typeof item?.description === 'string' ? item.description.toLowerCase() : ''
+        const place = typeof item?.eventPlace === 'string' ? item.eventPlace.toLowerCase() : ''
+        return desc.includes(keyword) || place.includes(keyword)
+      })
+    : typed
+  postPageTotal.value = filtered.length
+
+  const start = (postPageNo.value - 1) * postPageSize.value
+  const end = start + postPageSize.value
+  myPosts.value = filtered.slice(start, end)
+  await attachPostCoverImages(myPosts.value)
+
+  postCount.value = mine.length
+  foundCount.value = mine.filter((item) => item.type === 1).length
+  lostCount.value = mine.filter((item) => item.type === 0).length
+  cardCount.value = mine.filter((item) => item.type === 2).length
+}
+
+const loadSummary = async () => {
+  profileLoading.value = true
   error.value = ''
   try {
     await authStore.fetchCurrentUser()
-    const data = await filterItemsApi({ pageNo: 1, pageSize: 100 })
-    const records = Array.isArray(data?.records) ? data.records : []
-    const id = authStore.user?.id
-    myPosts.value = records.filter((x) => x.userId === id || x.publisher?.id === id)
-    await attachPostCoverImages(myPosts.value)
-    postCount.value = myPosts.value.length
+    const [totalData, foundData, lostData, cardData] = await Promise.all([
+      listMyItemsApi({ pageNo: 1, pageSize: 1 }),
+      listMyItemsApi({ pageNo: 1, pageSize: 1, type: 1 }),
+      listMyItemsApi({ pageNo: 1, pageSize: 1, type: 0 }),
+      listMyItemsApi({ pageNo: 1, pageSize: 1, type: 2 }),
+    ])
+    postCount.value = Number(totalData?.total || 0)
+    foundCount.value = Number(foundData?.total || 0)
+    lostCount.value = Number(lostData?.total || 0)
+    cardCount.value = Number(cardData?.total || 0)
   } catch (e) {
     error.value = e?.message || '加载个人中心失败'
   } finally {
-    loading.value = false
+    profileLoading.value = false
   }
+}
+
+const loadPosts = async () => {
+  postsLoading.value = true
+  postError.value = ''
+  try {
+    const typeParam = selectedPostType.value === 'all' ? undefined : selectedPostType.value
+    const keyword = postKeyword.value.trim()
+    const pageData = await listMyItemsApi({
+      pageNo: postPageNo.value,
+      pageSize: postPageSize.value,
+      type: typeParam,
+      keyword: keyword || undefined,
+    })
+    myPosts.value = Array.isArray(pageData?.records) ? pageData.records : []
+    postPageTotal.value = Number(pageData?.total || 0)
+    await attachPostCoverImages(myPosts.value)
+  } catch (e) {
+    if (e?.response?.status === 404) {
+      await loadProfileLegacy()
+      return
+    }
+    postError.value = e?.message || '加载发帖列表失败'
+  } finally {
+    postsLoading.value = false
+  }
+}
+
+const loadProfile = async () => {
+  await loadSummary()
+  if (!error.value) {
+    await loadPosts()
+  }
+}
+
+const handlePostTypeChange = async (value) => {
+  selectedPostType.value = value
+  postPageNo.value = 1
+  await loadPosts()
+}
+
+const handlePostKeywordInput = (event) => {
+  postKeyword.value = event.target.value || ''
+  clearTimeout(postSearchTimer)
+  postSearchTimer = setTimeout(async () => {
+    postPageNo.value = 1
+    await loadPosts()
+  }, 320)
+}
+
+const handlePrevPostPage = async () => {
+  if (!canPrevPostPage.value) return
+  postPageNo.value -= 1
+  await loadPosts()
+}
+
+const handleNextPostPage = async () => {
+  if (!canNextPostPage.value) return
+  postPageNo.value += 1
+  await loadPosts()
+}
+
+const handlePostPageSizeChange = async (event) => {
+  postPageSize.value = Number(event.target.value) || 20
+  postPageNo.value = 1
+  await loadPosts()
 }
 
 const postTypeLabel = (type) => {
@@ -157,6 +276,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onWindowKeydown)
+  clearTimeout(postSearchTimer)
 })
 </script>
 
@@ -172,7 +292,7 @@ onBeforeUnmount(() => {
         <button type="button" class="refresh-btn" @click="loadProfile">刷新</button>
       </header>
 
-      <p v-if="loading" class="muted">正在加载...</p>
+      <p v-if="profileLoading" class="muted">正在加载…</p>
       <p v-else-if="error" class="error">{{ error }}</p>
 
       <div v-else class="profile-grid">
@@ -217,10 +337,30 @@ onBeforeUnmount(() => {
         </section>
       </div>
 
-      <section v-if="!loading && !error" class="post-panel">
+      <section v-if="!profileLoading && !error" class="post-panel">
         <div class="post-head">
           <h3>我的发帖</h3>
-          <p>共 {{ filteredPosts.length }} / {{ postCount }} 条</p>
+          <div class="post-head-tools">
+            <input
+              class="post-search"
+              type="search"
+              name="post-search"
+              autocomplete="off"
+              placeholder="搜索标题或地点"
+              :value="postKeyword"
+              @input="handlePostKeywordInput"
+            />
+            <p>共 {{ postPageTotal }} / {{ postCount }} 条</p>
+            <label class="head-page-size-label">
+              每页
+              <select class="head-page-size" :value="postPageSize" @change="handlePostPageSizeChange">
+                <option :value="12">12</option>
+                <option :value="20">20</option>
+                <option :value="40">40</option>
+                <option :value="100">100</option>
+              </select>
+            </label>
+          </div>
         </div>
         <div class="post-type-segmented" role="group" aria-label="我的帖子分类">
           <button
@@ -229,16 +369,16 @@ onBeforeUnmount(() => {
             type="button"
             class="post-type-btn"
             :class="{ active: selectedPostType === opt.value }"
-            @click="selectedPostType = opt.value"
+            @click="handlePostTypeChange(opt.value)"
           >
             {{ opt.label }}
           </button>
         </div>
 
-        <p v-if="!myPosts.length" class="muted">暂时还没有发布记录</p>
-        <p v-else-if="!filteredPosts.length" class="muted">当前分类暂无记录</p>
-
-        <div v-else class="post-grid">
+        <p v-if="postsLoading" class="muted">正在加载发帖列表…</p>
+        <p v-else-if="postError" class="error">{{ postError }}</p>
+        <p v-else-if="!myPosts.length" class="muted">暂时还没有发布记录</p>
+        <div v-else class="post-grid" :style="{ '--post-card-min-width': `${postCardMinWidth}px` }">
           <button
             v-for="item in filteredPosts"
             :key="item.id"
@@ -258,6 +398,11 @@ onBeforeUnmount(() => {
             </div>
           </button>
         </div>
+        <div v-if="postPageTotal > 0" class="pager">
+          <button class="pager-btn" type="button" :disabled="!canPrevPostPage" @click="handlePrevPostPage">上一页</button>
+          <span class="pager-indicator">{{ postPageNo }} / {{ postPageCount }}</span>
+          <button class="pager-btn" type="button" :disabled="!canNextPostPage" @click="handleNextPostPage">下一页</button>
+        </div>
       </section>
     </section>
 
@@ -271,7 +416,7 @@ onBeforeUnmount(() => {
 
           <div class="detail-content">
             <aside class="detail-left">
-              <div v-if="detailLoading" class="media-placeholder" role="status" aria-live="polite">正在加载...</div>
+              <div v-if="detailLoading" class="media-placeholder" role="status" aria-live="polite">正在加载…</div>
               <div v-else-if="detailError" class="media-placeholder error" role="alert" aria-live="polite">{{ detailError }}</div>
               <template v-else>
                 <div class="carousel">
@@ -531,6 +676,27 @@ dd {
   gap: 0.8rem;
 }
 
+.post-head-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.post-search {
+  border: 1px solid #d7dee8;
+  border-radius: 999px;
+  background: #f7f9fc;
+  padding: 0.42rem 0.78rem;
+  font-size: 0.8rem;
+  width: 196px;
+}
+
+.post-search:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
 .post-head h3 {
   margin: 0;
   font-size: 1rem;
@@ -540,6 +706,23 @@ dd {
   margin: 0;
   color: var(--text-secondary);
   font-size: 0.85rem;
+}
+
+.head-page-size-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: #475569;
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.head-page-size {
+  border: 1px solid #cfd9e7;
+  border-radius: 999px;
+  padding: 0.2rem 0.45rem;
+  font-size: 0.78rem;
+  background: #fff;
 }
 
 .post-type-segmented {
@@ -579,8 +762,40 @@ dd {
 
 .post-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(var(--post-card-min-width, 230px), 1fr));
   gap: 0.8rem;
+}
+
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.pager-btn {
+  border: 1px solid #cfd9e7;
+  background: #fff;
+  border-radius: 8px;
+  padding: 0.3rem 0.65rem;
+  cursor: pointer;
+  font-size: 0.78rem;
+}
+
+.pager-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.pager-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(29, 78, 216, 0.2);
+}
+
+.pager-indicator {
+  color: #64748b;
+  font-size: 0.78rem;
 }
 
 .post-card {
@@ -822,6 +1037,20 @@ dd {
 
   .detail-content {
     grid-template-columns: 1fr;
+  }
+
+  .post-head {
+    flex-wrap: wrap;
+  }
+
+  .post-head-tools {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .post-search {
+    width: 100%;
+    max-width: 220px;
   }
 
   .detail-right {
