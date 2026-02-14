@@ -1,0 +1,22 @@
+.fade-rise-enter-active,
+.fade-rise-leave-active {
+  transition: opacity 220ms ease, transform 220ms ease;
+}
+
+.fade-rise-enter-from,
+.fade-rise-leave-to {
+  opacity: 0;
+  transform: translateY(10px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fade-rise-enter-active,
+  .fade-rise-leave-active {
+    transition: none;
+  }
+
+  .fade-rise-enter-from,
+  .fade-rise-leave-to {
+    transform: none;
+  }
+}
