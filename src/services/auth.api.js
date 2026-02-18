@@ -12,6 +12,14 @@ export function registerApi(payload) {
   return http.post('/auth/register', payload)
 }
 
+export function sendPasswordResetCodeApi(payload) {
+  return http.post('/auth/password/code', payload)
+}
+
+export function resetPasswordApi(payload) {
+  return http.post('/auth/password/reset', payload)
+}
+
 export function refreshTokenApi(payload) {
   return http.post('/auth/refresh', payload)
 }

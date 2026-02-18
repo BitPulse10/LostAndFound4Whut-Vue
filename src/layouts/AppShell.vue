@@ -8,6 +8,7 @@ const authStore = useAuthStore()
 const TXT = {
   brand: '武理智寻',
   home: '首页',
+  publish: '发布物品',
   profile: '个人中心',
   login: '登录',
   register: '注册',
@@ -33,6 +34,7 @@ const logout = async () => {
       <nav class="actions">
         <RouterLink class="link" to="/home">{{ TXT.home }}</RouterLink>
         <template v-if="authStore.isLoggedIn">
+          <RouterLink class="link" to="/items/publish">{{ TXT.publish }}</RouterLink>
           <RouterLink class="link" to="/profile">{{ TXT.profile }}</RouterLink>
           <button class="link ghost" type="button" @click="logout">{{ TXT.logout }}</button>
         </template>

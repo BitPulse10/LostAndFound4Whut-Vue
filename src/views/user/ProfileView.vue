@@ -2,7 +2,8 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import AppShell from '../../layouts/AppShell.vue'
 import { useAuthStore } from '../../stores/auth'
-import { filterItemsApi, getItemDetailByIdApi, listMyItemsApi } from '../../services/item.api'
+import { resetPasswordApi, sendPasswordResetCodeApi } from '../../services/auth.api'
+import { closeItemApi, filterItemsApi, getItemDetailByIdApi, listMyItemsApi, takeDownItemApi } from '../../services/item.api'
 
 const authStore = useAuthStore()
 const profileLoading = ref(false)
@@ -16,7 +17,20 @@ const postKeyword = ref('')
 const postPageNo = ref(1)
 const postPageSize = ref(20)
 const postPageTotal = ref(0)
+const postActionId = ref(0)
+const postActionType = ref('')
 let postSearchTimer
+
+const passwordDialogOpen = ref(false)
+const passwordSendingCode = ref(false)
+const passwordSubmitting = ref(false)
+const passwordFeedback = ref('')
+const passwordError = ref('')
+const passwordForm = ref({
+  code: '',
+  password: '',
+  confirmPassword: '',
+})
 
 const detailOpen = ref(false)
 const detailLoading = ref(false)
@@ -269,6 +283,129 @@ const postTypeLabel = (type) => {
   return '未知'
 }
 
+const postStatusLabel = (status) => (status === 1 ? '已结束' : '进行中')
+const canClosePost = (item) => Number(item?.status) !== 1
+const isActionPending = (itemId, type) => postActionId.value === Number(itemId) && postActionType.value === type
+const anyPostActionPending = computed(() => postActionId.value > 0)
+
+const closePost = async (item) => {
+  if (!item?.id || !canClosePost(item) || anyPostActionPending.value) return
+  const confirmed = window.confirm('确认将该帖子标记为“已结束”？结束后不会自动恢复。')
+  if (!confirmed) return
+
+  postActionId.value = Number(item.id)
+  postActionType.value = 'close'
+  postError.value = ''
+  try {
+    await closeItemApi(item.id)
+    item.status = 1
+    await loadSummary()
+  } catch (e) {
+    postError.value = e?.message || '结束帖子失败'
+  } finally {
+    postActionId.value = 0
+    postActionType.value = ''
+  }
+}
+
+const deletePost = async (item) => {
+  if (!item?.id || anyPostActionPending.value) return
+  const confirmed = window.confirm('确认删除该帖子？删除后将不再显示。')
+  if (!confirmed) return
+
+  postActionId.value = Number(item.id)
+  postActionType.value = 'delete'
+  postError.value = ''
+  try {
+    await takeDownItemApi(item.id)
+    if (detailOpen.value && Number(detailItem.value?.id) === Number(item.id)) {
+      closeDetail()
+    }
+    await loadProfile()
+  } catch (e) {
+    postError.value = e?.message || '删除帖子失败'
+  } finally {
+    postActionId.value = 0
+    postActionType.value = ''
+  }
+}
+
+const openPasswordDialog = () => {
+  passwordDialogOpen.value = true
+  passwordFeedback.value = ''
+  passwordError.value = ''
+  passwordForm.value = {
+    code: '',
+    password: '',
+    confirmPassword: '',
+  }
+}
+
+const closePasswordDialog = () => {
+  passwordDialogOpen.value = false
+  passwordError.value = ''
+}
+
+const sendPasswordCode = async () => {
+  if (passwordSendingCode.value) return
+  passwordError.value = ''
+  passwordFeedback.value = ''
+  const currentEmail = email.value
+  if (!currentEmail || currentEmail === '-') {
+    passwordError.value = '当前账号缺少邮箱，无法发送验证码'
+    return
+  }
+  passwordSendingCode.value = true
+  try {
+    await sendPasswordResetCodeApi({ email: currentEmail })
+    passwordFeedback.value = '验证码已发送到当前邮箱'
+  } catch (e) {
+    passwordError.value = e?.message || '发送验证码失败'
+  } finally {
+    passwordSendingCode.value = false
+  }
+}
+
+const submitPasswordReset = async () => {
+  if (passwordSubmitting.value) return
+  passwordError.value = ''
+  passwordFeedback.value = ''
+  const currentEmail = email.value
+  if (!currentEmail || currentEmail === '-') {
+    passwordError.value = '当前账号缺少邮箱，无法修改密码'
+    return
+  }
+  const code = passwordForm.value.code.trim()
+  const password = passwordForm.value.password
+  const confirmPassword = passwordForm.value.confirmPassword
+  if (!code) {
+    passwordError.value = '请输入验证码'
+    return
+  }
+  if (!password || password.length < 6) {
+    passwordError.value = '新密码长度至少为6位'
+    return
+  }
+  if (password !== confirmPassword) {
+    passwordError.value = '两次输入的新密码不一致'
+    return
+  }
+  passwordSubmitting.value = true
+  try {
+    await resetPasswordApi({
+      email: currentEmail,
+      code,
+      password,
+      confirmPassword,
+    })
+    passwordFeedback.value = '密码修改成功'
+  } catch (e) {
+    passwordError.value = e?.message || '修改密码失败'
+  } finally {
+    passwordSubmitting.value = false
+  }
+}
+
 onMounted(async () => {
   window.addEventListener('keydown', onWindowKeydown)
   await loadProfile()
@@ -289,7 +426,10 @@ onBeforeUnmount(() => {
           <h2>欢迎回来</h2>
           <p class="sub">查看你的资料与发布统计</p>
         </div>
-        <button type="button" class="refresh-btn" @click="loadProfile">刷新</button>
+        <div class="head-actions">
+          <button type="button" class="refresh-btn ghost" @click="openPasswordDialog">修改密码</button>
+          <button type="button" class="refresh-btn" @click="loadProfile">刷新</button>
+        </div>
       </header>
 
       <p v-if="profileLoading" class="muted">正在加载…</p>
@@ -379,12 +519,10 @@ onBeforeUnmount(() => {
         <p v-else-if="postError" class="error">{{ postError }}</p>
         <p v-else-if="!myPosts.length" class="muted">暂时还没有发布记录</p>
         <div v-else class="post-grid" :style="{ '--post-card-min-width': `${postCardMinWidth}px` }">
-          <button
+          <article
             v-for="item in filteredPosts"
             :key="item.id"
             class="post-card"
-            type="button"
-            @click="openDetail(item.id)"
           >
             <div
               class="post-cover"
@@ -395,8 +533,30 @@ onBeforeUnmount(() => {
               <p class="post-title">{{ item.description || '无标题物品' }}</p>
               <p class="post-meta">{{ postTypeLabel(item.type) }} · {{ item.eventPlace || '地点未填写' }}</p>
               <p class="post-time">{{ formatDate(item.createdAt || item.eventTime) }}</p>
+              <div class="post-status-row">
+                <span class="post-status" :class="{ closed: Number(item.status) === 1 }">{{ postStatusLabel(item.status) }}</span>
+              </div>
+              <div class="post-actions">
+                <button type="button" class="post-action-btn detail" @click="openDetail(item.id)">查看详情</button>
+                <button
+                  type="button"
+                  class="post-action-btn close"
+                  :disabled="!canClosePost(item) || anyPostActionPending"
+                  @click="closePost(item)"
+                >
+                  {{ isActionPending(item.id, 'close') ? '结束中…' : '结束帖子' }}
+                </button>
+                <button
+                  type="button"
+                  class="post-action-btn delete"
+                  :disabled="anyPostActionPending"
+                  @click="deletePost(item)"
+                >
+                  {{ isActionPending(item.id, 'delete') ? '删除中…' : '删除帖子' }}
+                </button>
+              </div>
             </div>
-          </button>
+          </article>
         </div>
         <div v-if="postPageTotal > 0" class="pager">
           <button class="pager-btn" type="button" :disabled="!canPrevPostPage" @click="handlePrevPostPage">上一页</button>
@@ -407,6 +567,52 @@ onBeforeUnmount(() => {
     </section>
 
     <Teleport to="body">
+      <div v-if="passwordDialogOpen" class="detail-overlay">
+        <section class="password-modal">
+          <header class="drawer-head">
+            <h4>修改密码</h4>
+            <button class="close-btn" type="button" aria-label="关闭" @click="closePasswordDialog">&times;</button>
+          </header>
+          <form class="password-form" @submit.prevent="submitPasswordReset">
+            <label class="password-field">
+              <span>当前邮箱</span>
+              <input :value="email" type="email" readonly />
+            </label>
+            <div class="password-code-row">
+              <label class="password-field">
+                <span>邮箱验证码</span>
+                <input v-model="passwordForm.code" type="text" maxlength="8" placeholder="请输入验证码" />
+              </label>
+              <button type="button" class="password-code-btn" :disabled="passwordSendingCode" @click="sendPasswordCode">
+                {{ passwordSendingCode ? '发送中…' : '发送验证码' }}
+              </button>
+            </div>
+            <label class="password-field">
+              <span>新密码</span>
+              <input v-model="passwordForm.password" type="password" minlength="6" maxlength="64" placeholder="至少 6 位" />
+            </label>
+            <label class="password-field">
+              <span>确认新密码</span>
+              <input
+                v-model="passwordForm.confirmPassword"
+                type="password"
+                minlength="6"
+                maxlength="64"
+                placeholder="再次输入新密码"
+              />
+            </label>
+            <p v-if="passwordFeedback" class="success">{{ passwordFeedback }}</p>
+            <p v-if="passwordError" class="error">{{ passwordError }}</p>
+            <div class="password-actions">
+              <button type="button" class="post-action-btn detail" @click="closePasswordDialog">取消</button>
+              <button type="submit" class="post-action-btn close" :disabled="passwordSubmitting">
+                {{ passwordSubmitting ? '提交中…' : '确认修改' }}
+              </button>
+            </div>
+          </form>
+        </section>
+      </div>
+
       <div v-if="detailOpen" class="detail-overlay" @click.self="closeDetail">
         <section class="detail-modal">
           <header class="drawer-head">
@@ -488,6 +694,12 @@ onBeforeUnmount(() => {
   box-shadow: 0 16px 30px rgba(24, 33, 64, 0.08);
 }
 
+.head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
 .kicker {
   font-size: 0.75rem;
   letter-spacing: 0.18em;
@@ -518,6 +730,15 @@ onBeforeUnmount(() => {
 
 .refresh-btn:hover {
   background: var(--accent-hover);
+}
+
+.refresh-btn.ghost {
+  background: #eaf0ff;
+  color: #17408e;
+}
+
+.refresh-btn.ghost:hover {
+  background: #dce7ff;
 }
 
 .refresh-btn:focus-visible {
@@ -657,6 +878,10 @@ dd {
 
 .error {
   color: #b42318;
+}
+
+.success {
+  color: #0f766e;
 }
 
 .post-panel {
@@ -799,8 +1024,6 @@ dd {
 }
 
 .post-card {
-  text-decoration: none;
-  color: inherit;
   border: 1px solid #d7dee8;
   border-radius: 14px;
   padding: 0.7rem;
@@ -809,20 +1032,11 @@ dd {
   gap: 0.55rem;
   box-shadow: 0 8px 20px rgba(24, 33, 64, 0.08);
   transition: transform 120ms ease, box-shadow 120ms ease;
-  text-align: left;
-  font: inherit;
-  cursor: pointer;
-  appearance: none;
 }
 
 .post-card:hover {
   transform: translateY(-2px);
   box-shadow: 0 18px 32px rgba(24, 33, 64, 0.18);
-}
-
-.post-card:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
 .post-title {
@@ -854,6 +1068,138 @@ dd {
   margin: 0;
   color: var(--text-secondary);
   font-size: 0.82rem;
+}
+
+.post-status-row {
+  margin-top: 0.1rem;
+}
+
+.post-status {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  border: 1px solid #d2deef;
+  padding: 0.18rem 0.55rem;
+  font-size: 0.74rem;
+  color: #21518e;
+  background: #eef4ff;
+}
+
+.post-status.closed {
+  border-color: #dcc9a6;
+  color: #8a5b0a;
+  background: #fff8ea;
+}
+
+.post-actions {
+  margin-top: 0.4rem;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.4rem;
+}
+
+.post-action-btn {
+  border: 1px solid #c9d8ed;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #1f3e68;
+  font-size: 0.76rem;
+  font-weight: 600;
+  padding: 0.32rem 0.5rem;
+  cursor: pointer;
+}
+
+.post-action-btn.detail {
+  border-color: #cdd9ea;
+  color: #244872;
+}
+
+.post-action-btn.close {
+  border-color: #9ebce9;
+  color: #134aa7;
+  background: #edf4ff;
+}
+
+.post-action-btn.delete {
+  border-color: #f1c3c3;
+  color: #a02121;
+  background: #fff7f7;
+}
+
+.post-action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.post-action-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+.password-modal {
+  width: min(560px, 100%);
+  background: #ffffff;
+  border-radius: 18px;
+  padding: 1rem;
+  border: 1.5px solid #d7dee8;
+  box-shadow: 0 20px 46px rgba(24, 33, 64, 0.2);
+}
+
+.password-form {
+  margin-top: 0.7rem;
+  display: grid;
+  gap: 0.72rem;
+}
+
+.password-field {
+  display: grid;
+  gap: 0.36rem;
+}
+
+.password-field span {
+  font-size: 0.8rem;
+  color: #4b5d79;
+}
+
+.password-field input {
+  border: 1px solid #d7dee8;
+  border-radius: 10px;
+  padding: 0.55rem 0.65rem;
+  font: inherit;
+}
+
+.password-field input:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+.password-code-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.55rem;
+  align-items: end;
+}
+
+.password-code-btn {
+  border: 1px solid #9ebce9;
+  border-radius: 10px;
+  background: #edf4ff;
+  color: #134aa7;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0.53rem 0.78rem;
+}
+
+.password-code-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.password-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
 }
 
 .detail-overlay {
@@ -1031,6 +1377,14 @@ dd {
     align-items: flex-start;
   }
 
+  .head-actions {
+    width: 100%;
+  }
+
+  .head-actions .refresh-btn {
+    flex: 1;
+  }
+
   .stats {
     grid-template-columns: 1fr;
   }
@@ -1051,6 +1405,14 @@ dd {
   .post-search {
     width: 100%;
     max-width: 220px;
+  }
+
+  .post-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .password-code-row {
+    grid-template-columns: 1fr;
   }
 
   .detail-right {
