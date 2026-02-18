@@ -3,6 +3,7 @@ import LoginView from '../views/auth/LoginView.vue'
 import RegisterView from '../views/auth/RegisterView.vue'
 import ProfileView from '../views/user/ProfileView.vue'
 import ItemDetailView from '../views/item/ItemDetailView.vue'
+import ItemPublishView from '../views/item/ItemPublishView.vue'
 import HomeView from '../views/home/HomeView.vue'
 
 const TOKEN_KEY = 'laf_token'
@@ -58,9 +59,15 @@ const routes = [
     meta: { requiresAuth: true },
   },
   {
-    path: '/items/:id',
+    path: '/items/:id(\\d+)',
     name: 'item-detail',
     component: ItemDetailView,
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/items/publish',
+    name: 'item-publish',
+    component: ItemPublishView,
     meta: { requiresAuth: true },
   },
 ]
