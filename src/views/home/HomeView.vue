@@ -4,7 +4,13 @@ import { useRoute, useRouter } from 'vue-router'
 import AppShell from '../../layouts/AppShell.vue'
 import SoftPanel from '../../components/base/SoftPanel.vue'
 import TagFilterSidebar from '../../components/home/TagFilterSidebar.vue'
-import { filterItemsApi, getItemDetailByIdApi, recognizeImageTagsApi } from '../../services/item.api'
+import {
+  deleteImagesApi,
+  filterItemsApi,
+  getItemDetailByIdApi,
+  recognizeImageTagsApi,
+  uploadImagesApi,
+} from '../../services/item.api'
 import { listTagsApi } from '../../services/tag.api'
 
 const TXT = {
@@ -24,10 +30,15 @@ const TXT = {
   timeDay: '最近24小时',
   timeWeek: '最近7天',
   imageSearch: '图搜',
+  imageSearchActive: '图搜已启用',
+  imageSearchCount: '张图片参与检索',
+  applyImageSearch: '开始图搜',
+  imageSearchPending: '图搜待应用',
   imageOnlyOn: '图片流',
   imageOnlyOff: '图文流',
   refresh: '刷新',
   imageHint: '识别标签已加入待应用',
+  clearImageSearch: '清空图搜',
   loading: '正在加载…',
   empty: '暂无内容',
   cardEmpty: '卡证模式下不会主动展示物品，请先输入编号信息再检索。',
@@ -37,6 +48,7 @@ const TXT = {
   eventTime: '发现时间',
   publishTime: '发布时间',
   publisher: '发布者',
+  contactEmail: '联系邮箱',
   noImage: '暂无图片',
   detailTitle: '物品详情',
   prevPage: '上一页',
@@ -83,6 +95,9 @@ const pageSize = ref(20)
 const totalItems = ref(0)
 const imageOnly = ref(false)
 const syncingFromRoute = ref(false)
+const imageSearchIds = ref([])
+const imageSearchFiles = ref([])
+const activeImageSearchIds = ref([])
 
 const parsePositiveInt = (value, fallback) => {
   const parsed = Number.parseInt(value, 10)
@@ -145,7 +160,7 @@ const searchPlaceholder = computed(() =>
   selectedType.value === 'card' ? TXT.cardSearchPlaceholder : TXT.searchPlaceholder,
 )
 const emptyMessage = computed(() => {
-  if (selectedType.value === 'card' && !searchText.value.trim()) return TXT.cardEmpty
+  if (selectedType.value === 'card' && !searchText.value.trim() && activeImageSearchIds.value.length === 0) return TXT.cardEmpty
   return TXT.empty
 })
 const itemPageCount = computed(() => Math.max(1, Math.ceil(totalItems.value / pageSize.value)))
@@ -272,30 +287,21 @@ const formatDateTime = (value) => {
   }).format(date)
 }
 
+const toLocalDateTimeString = (date) => {
+  const pad = (num) => String(num).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+}
+
 const getTimeRange = () => {
   if (selectedTime.value === 'day') {
-    return new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+    return toLocalDateTimeString(new Date(Date.now() - 24 * 60 * 60 * 1000))
   }
   if (selectedTime.value === 'week') {
-    return new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
+    return toLocalDateTimeString(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000))
   }
   return null
 }
 
-
-const applyLocalSearch = (records) => {
-  if (selectedType.value === 'card') {
-    return records
-  }
-  let scoped = records
-  const keyword = searchText.value.trim().toLowerCase()
-  if (!keyword) return scoped
-  return scoped.filter((item) => {
-    const desc = (item?.description || '').toLowerCase()
-    const place = (item?.eventPlace || '').toLowerCase()
-    return desc.includes(keyword) || place.includes(keyword)
-  })
-}
 
 const fetchItems = async (reset = false) => {
   if (!hasValidSession()) {
@@ -320,13 +326,15 @@ const fetchItems = async (reset = false) => {
       pageNo: pageNo.value,
       pageSize: pageSize.value,
     }
-    if (selectedType.value === 'card' && !searchText.value.trim()) {
+    if (selectedType.value === 'card' && !searchText.value.trim() && activeImageSearchIds.value.length === 0) {
       items.value = []
       totalItems.value = 0
       return
     }
     if (selectedType.value === 0 || selectedType.value === 1) {
       payload.type = selectedType.value
+      const keyword = searchText.value.trim()
+      if (keyword) payload.keyword = keyword
     }
     if (selectedType.value === 'card') {
       payload.type = 2
@@ -334,6 +342,12 @@ const fetchItems = async (reset = false) => {
       if (cardKeyword) {
         payload.tags = [`priv:no=${cardKeyword}`]
         payload.preciseTagMatch = false
+      }
+    }
+    if (activeImageSearchIds.value.length > 0) {
+      payload.searchDTO = {
+        imageIds: activeImageSearchIds.value,
+        maxResults: Math.max(20, pageSize.value * 3),
       }
     }
     const startTime = getTimeRange()
@@ -345,11 +359,10 @@ const fetchItems = async (reset = false) => {
 
     const result = await filterItemsApi(payload)
     const records = Array.isArray(result?.records) ? result.records : []
-    const filtered = applyLocalSearch(records)
-    items.value = filtered
+    items.value = records
     totalItems.value = Number(result?.total || 0)
 
-    await attachCoverImages(filtered)
+    await attachCoverImages(records)
   } catch (err) {
     error.value = err?.message || TXT.error
   } finally {
@@ -429,12 +442,29 @@ const onWindowKeydown = (event) => {
 }
 
 const triggerImageSearch = async (event) => {
-  const file = event.target.files?.[0]
+  const files = Array.from(event.target.files || [])
   event.target.value = ''
-  if (!file) return
+  if (!files.length) return
   if (!requireLoginForAction()) return
   try {
-    const tags = await recognizeImageTagsApi(file)
+    const uploaded = await uploadImagesApi(files)
+    const ids = Array.isArray(uploaded) ? uploaded : []
+    const existing = new Set(imageSearchIds.value)
+    const mergedIds = [...imageSearchIds.value]
+    const mergedFiles = [...imageSearchFiles.value]
+    ids.forEach((id, idx) => {
+      if (existing.has(id)) return
+      existing.add(id)
+      mergedIds.push(id)
+      mergedFiles.push({
+        id,
+        name: files[idx]?.name || `image-${mergedIds.length}`,
+      })
+    })
+    imageSearchIds.value = mergedIds
+    imageSearchFiles.value = mergedFiles
+
+    const tags = await recognizeImageTagsApi(files[0])
     recognizedTags.value = Array.isArray(tags) ? tags.slice(0, 6) : []
     const merged = [...pendingTags.value]
     for (const tag of recognizedTags.value) {
@@ -444,6 +474,48 @@ const triggerImageSearch = async (event) => {
     sidebarCollapsed.value = false
   } catch {
     // ignore
+  }
+}
+
+const applyImageSearch = async () => {
+  activeImageSearchIds.value = [...imageSearchIds.value]
+  await fetchItems(true)
+}
+
+const clearImageSearch = async () => {
+  const idsToDelete = [...imageSearchIds.value]
+  if (idsToDelete.length > 0) {
+    try {
+      await deleteImagesApi(idsToDelete)
+    } catch {
+      // ignore
+    }
+  }
+  imageSearchIds.value = []
+  imageSearchFiles.value = []
+  activeImageSearchIds.value = []
+  recognizedTags.value = []
+  await fetchItems(true)
+}
+
+const removeImageSearchAt = async (index) => {
+  if (index < 0 || index >= imageSearchIds.value.length) return
+  const removedId = imageSearchIds.value[index]
+  if (removedId != null) {
+    try {
+      await deleteImagesApi([removedId])
+    } catch {
+      // ignore
+    }
+  }
+  imageSearchIds.value = imageSearchIds.value.filter((_, i) => i !== index)
+  imageSearchFiles.value = imageSearchFiles.value.filter((_, i) => i !== index)
+  activeImageSearchIds.value = activeImageSearchIds.value.filter((id) => id !== removedId)
+  if (imageSearchIds.value.length === 0) {
+    recognizedTags.value = []
+  }
+  if (activeImageSearchIds.value.length > 0 || selectedType.value !== 'card' || searchText.value.trim()) {
+    await fetchItems(true)
   }
 }
 
@@ -693,16 +765,22 @@ onBeforeUnmount(() => {
             ref="imageInputRef"
             type="file"
             accept="image/*"
+            multiple
             class="hidden-input"
             aria-label="图片搜索"
             @change="triggerImageSearch"
           />
-          <button class="hero-image-search" type="button" @click="handleOpenImagePicker">
+          <button
+            class="hero-image-search"
+            :class="{ active: imageSearchIds.length > 0 }"
+            type="button"
+            @click="handleOpenImagePicker"
+          >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">
               <path d="M4.5 8.5a2 2 0 0 1 2-2h2l1-1.6c.2-.33.56-.54.95-.54h3.1c.39 0 .75.21.95.54l1 1.6h2a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-11a2 2 0 0 1-2-2v-8Z"></path>
               <circle cx="12" cy="12.5" r="3.2"></circle>
             </svg>
-            <span>{{ TXT.imageSearch }}</span>
+            <span>{{ imageSearchIds.length > 0 ? `${TXT.imageSearch} (${imageSearchIds.length})` : TXT.imageSearch }}</span>
           </button>
         </div>
         <div class="hero-tools">
@@ -759,6 +837,35 @@ onBeforeUnmount(() => {
             {{ TXT.imageHint }}：
             <span v-for="tag in recognizedTags" :key="`tag-${tag}`">#{{ tag }}</span>
           </p>
+          <button
+            v-if="imageSearchIds.length"
+            type="button"
+            class="apply-image-search-btn"
+            @click="applyImageSearch"
+          >
+            {{ TXT.applyImageSearch }}
+          </button>
+          <button
+            v-if="imageSearchIds.length"
+            type="button"
+            class="clear-image-search-btn"
+            @click="clearImageSearch"
+          >
+            {{ TXT.clearImageSearch }}
+          </button>
+          <section v-if="imageSearchIds.length" class="image-search-active-panel" aria-live="polite">
+            <div class="panel-head">
+              <strong>{{ activeImageSearchIds.length ? TXT.imageSearchActive : TXT.imageSearchPending }}</strong>
+              <span>{{ imageSearchIds.length }} {{ TXT.imageSearchCount }}</span>
+            </div>
+            <ul class="image-search-list">
+              <li v-for="(item, index) in imageSearchFiles" :key="`image-search-${item.id}-${index}`">
+                <span class="file-name" :title="item.name">{{ item.name }}</span>
+                <span class="file-id">#{{ item.id }}</span>
+                <button type="button" class="remove-btn" @click="removeImageSearchAt(index)">移除</button>
+              </li>
+            </ul>
+          </section>
         </div>
         </header>
 
@@ -936,6 +1043,18 @@ onBeforeUnmount(() => {
                   <dd>{{ detailItem.publisher?.nickname || '-' }}</dd>
                 </div>
                 <div>
+                  <dt>{{ TXT.contactEmail }}</dt>
+                  <dd>
+                    <a
+                      v-if="detailItem.publisher?.email"
+                      :href="`mailto:${detailItem.publisher.email}`"
+                    >
+                      {{ detailItem.publisher.email }}
+                    </a>
+                    <span v-else>-</span>
+                  </dd>
+                </div>
+                <div>
                   <dt>{{ TXT.place }}</dt>
                   <dd>{{ detailItem.eventPlace || '-' }}</dd>
                 </div>
@@ -1028,6 +1147,11 @@ onBeforeUnmount(() => {
   transform: translateY(-1px);
   background: #3a75ee;
   box-shadow: 0 16px 26px rgba(58, 117, 238, 0.24);
+}
+
+.hero-image-search.active {
+  background: #1f5bcc;
+  border-color: #1f5bcc;
 }
 
 .hero-image-search:focus-visible {
@@ -1193,6 +1317,113 @@ onBeforeUnmount(() => {
   display: flex;
   gap: 0.35rem;
   flex-wrap: wrap;
+}
+
+.clear-image-search-btn {
+  justify-self: start;
+  border: 1px solid #cfd9e7;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #334155;
+  padding: 0.32rem 0.72rem;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.apply-image-search-btn {
+  justify-self: start;
+  border: 1px solid #1f5bcc;
+  border-radius: 999px;
+  background: #1f5bcc;
+  color: #ffffff;
+  padding: 0.32rem 0.72rem;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.apply-image-search-btn:hover {
+  background: #1b4fb3;
+}
+
+.apply-image-search-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+.clear-image-search-btn:hover {
+  background: #f8fafc;
+}
+
+.clear-image-search-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+.image-search-active-panel {
+  justify-self: stretch;
+  border: 1px solid #d7dee8;
+  border-radius: 10px;
+  background: #f8fbff;
+  padding: 0.55rem 0.65rem;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.image-search-active-panel .panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  color: #1e3a8a;
+  font-size: 0.78rem;
+}
+
+.image-search-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.35rem;
+  max-height: 140px;
+  overflow: auto;
+}
+
+.image-search-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 0.45rem;
+  border: 1px solid #dbe5f3;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 0.26rem 0.45rem;
+}
+
+.image-search-list .file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #1f2937;
+  font-size: 0.78rem;
+}
+
+.image-search-list .file-id {
+  color: #64748b;
+  font-size: 0.74rem;
+}
+
+.image-search-list .remove-btn {
+  border: 1px solid #d5deec;
+  background: #f8fafc;
+  color: #334155;
+  border-radius: 999px;
+  padding: 0.14rem 0.45rem;
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+
+.image-search-list .remove-btn:hover {
+  background: #f1f5f9;
 }
 
 .grid-shell {

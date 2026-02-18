@@ -314,6 +314,8 @@ onBeforeUnmount(() => {
   padding: 0.9rem;
   display: grid;
   gap: 0.8rem;
+  max-height: calc(100vh - 8.4rem);
+  overflow: auto;
 }
 
 .panel-head h3 {
@@ -478,6 +480,12 @@ onBeforeUnmount(() => {
 .pager {
   display: grid;
   gap: 0.5rem;
+  position: sticky;
+  bottom: -0.9rem;
+  background: #ffffff;
+  margin: 0 -0.9rem -0.9rem;
+  padding: 0.65rem 0.9rem 0.9rem;
+  border-top: 1px solid #e2e8f0;
 }
 
 .hint-text {
@@ -567,7 +575,6 @@ onBeforeUnmount(() => {
 
   .panel {
     max-height: min(64vh, 540px);
-    overflow: auto;
   }
 }
 </style>
