@@ -4,6 +4,7 @@ import RegisterView from '../views/auth/RegisterView.vue'
 import ProfileView from '../views/user/ProfileView.vue'
 import ItemDetailView from '../views/item/ItemDetailView.vue'
 import ItemPublishView from '../views/item/ItemPublishView.vue'
+import ItemEditView from '../views/item/ItemEditView.vue'
 import HomeView from '../views/home/HomeView.vue'
 
 const TOKEN_KEY = 'laf_token'
@@ -68,6 +69,12 @@ const routes = [
     path: '/items/publish',
     name: 'item-publish',
     component: ItemPublishView,
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/items/:id(\\d+)/edit',
+    name: 'item-edit',
+    component: ItemEditView,
     meta: { requiresAuth: true },
   },
 ]

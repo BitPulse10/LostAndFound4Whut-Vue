@@ -1,10 +1,12 @@
 ﻿<script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import AppShell from '../../layouts/AppShell.vue'
 import { useAuthStore } from '../../stores/auth'
 import { resetPasswordApi, sendPasswordResetCodeApi } from '../../services/auth.api'
 import { closeItemApi, filterItemsApi, getItemDetailByIdApi, listMyItemsApi, takeDownItemApi } from '../../services/item.api'
 
+const router = useRouter()
 const authStore = useAuthStore()
 const profileLoading = ref(false)
 const postsLoading = ref(false)
@@ -283,10 +285,20 @@ const postTypeLabel = (type) => {
   return '未知'
 }
 
+const buildPostImageAlt = (item) => {
+  const desc = item?.description || '无标题物品'
+  return `物品图片：${desc}`
+}
+
 const postStatusLabel = (status) => (status === 1 ? '已结束' : '进行中')
 const canClosePost = (item) => Number(item?.status) !== 1
 const isActionPending = (itemId, type) => postActionId.value === Number(itemId) && postActionType.value === type
 const anyPostActionPending = computed(() => postActionId.value > 0)
+
+const editPost = (item) => {
+  if (!item?.id || anyPostActionPending.value) return
+  router.push(`/items/${item.id}/edit`)
+}
 
 const closePost = async (item) => {
   if (!item?.id || !canClosePost(item) || anyPostActionPending.value) return
@@ -486,6 +498,7 @@ onBeforeUnmount(() => {
               type="search"
               name="post-search"
               autocomplete="off"
+              aria-label="搜索标题或地点"
               placeholder="搜索标题或地点"
               :value="postKeyword"
               @input="handlePostKeywordInput"
@@ -524,20 +537,32 @@ onBeforeUnmount(() => {
             :key="item.id"
             class="post-card"
           >
-            <div
-              class="post-cover"
-              :class="{ 'has-cover': item.coverUrl }"
-              :style="item.coverUrl ? { backgroundImage: `url('${item.coverUrl}')` } : {}"
-            ></div>
-            <div class="post-body">
-              <p class="post-title">{{ item.description || '无标题物品' }}</p>
-              <p class="post-meta">{{ postTypeLabel(item.type) }} · {{ item.eventPlace || '地点未填写' }}</p>
-              <p class="post-time">{{ formatDate(item.createdAt || item.eventTime) }}</p>
-              <div class="post-status-row">
-                <span class="post-status" :class="{ closed: Number(item.status) === 1 }">{{ postStatusLabel(item.status) }}</span>
+            <button type="button" class="post-card-main" @click="openDetail(item.id)">
+              <img
+                v-if="item.coverUrl"
+                :src="item.coverUrl"
+                :alt="buildPostImageAlt(item)"
+                class="post-cover post-cover-image"
+              />
+              <div v-else class="post-cover" aria-hidden="true"></div>
+              <div class="post-body">
+                <p class="post-title">{{ item.description || '无标题物品' }}</p>
+                <p class="post-meta">{{ postTypeLabel(item.type) }} · {{ item.eventPlace || '地点未填写' }}</p>
+                <p class="post-time">{{ formatDate(item.createdAt || item.eventTime) }}</p>
+                <div class="post-status-row">
+                  <span class="post-status" :class="{ closed: Number(item.status) === 1 }">{{ postStatusLabel(item.status) }}</span>
+                </div>
               </div>
-              <div class="post-actions">
-                <button type="button" class="post-action-btn detail" @click="openDetail(item.id)">查看详情</button>
+            </button>
+            <div class="post-actions">
+                <button
+                  type="button"
+                  class="post-action-btn edit"
+                  :disabled="anyPostActionPending"
+                  @click="editPost(item)"
+                >
+                  重新编辑
+                </button>
                 <button
                   type="button"
                   class="post-action-btn close"
@@ -554,7 +579,6 @@ onBeforeUnmount(() => {
                 >
                   {{ isActionPending(item.id, 'delete') ? '删除中…' : '删除帖子' }}
                 </button>
-              </div>
             </div>
           </article>
         </div>
@@ -913,7 +937,7 @@ dd {
   background: #f7f9fc;
   padding: 0.42rem 0.78rem;
   font-size: 0.8rem;
-  width: 196px;
+  width: clamp(240px, 28vw, 360px);
 }
 
 .post-search:focus-visible {
@@ -1027,6 +1051,7 @@ dd {
   border: 1px solid #d7dee8;
   border-radius: 14px;
   padding: 0.7rem;
+  overflow: hidden;
   background: #ffffff;
   display: grid;
   gap: 0.55rem;
@@ -1037,6 +1062,24 @@ dd {
 .post-card:hover {
   transform: translateY(-2px);
   box-shadow: 0 18px 32px rgba(24, 33, 64, 0.18);
+}
+
+.post-card-main {
+  border: none;
+  background: transparent;
+  padding: 0;
+  margin: 0;
+  width: 100%;
+  text-align: left;
+  display: grid;
+  gap: 0.55rem;
+  cursor: pointer;
+}
+
+.post-card-main:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--focus-ring);
+  border-radius: 10px;
 }
 
 .post-title {
@@ -1051,16 +1094,17 @@ dd {
 }
 
 .post-cover {
+  display: block;
   width: 100%;
   border-radius: 10px;
   background: #e5eaf3;
   aspect-ratio: 3 / 4;
-  background-size: cover;
-  background-position: center;
+  overflow: hidden;
 }
 
-.post-cover.has-cover {
-  background-color: #d2d9e6;
+.post-cover-image {
+  object-fit: cover;
+  background: #d2d9e6;
 }
 
 .post-meta,
@@ -1109,15 +1153,16 @@ dd {
   cursor: pointer;
 }
 
-.post-action-btn.detail {
-  border-color: #cdd9ea;
-  color: #244872;
-}
-
 .post-action-btn.close {
   border-color: #9ebce9;
   color: #134aa7;
   background: #edf4ff;
+}
+
+.post-action-btn.edit {
+  border-color: #c7d7f2;
+  color: #1d4b93;
+  background: #eef3ff;
 }
 
 .post-action-btn.delete {
@@ -1404,7 +1449,7 @@ dd {
 
   .post-search {
     width: 100%;
-    max-width: 220px;
+    max-width: 360px;
   }
 
   .post-actions {
