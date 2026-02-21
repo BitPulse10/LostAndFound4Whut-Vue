@@ -5,11 +5,11 @@ import AppShell from '../../layouts/AppShell.vue'
 import SoftPanel from '../../components/base/SoftPanel.vue'
 import TagFilterSidebar from '../../components/home/TagFilterSidebar.vue'
 import {
-  deleteImagesApi,
+  deleteImageSearchApi,
   filterItemsApi,
   getItemDetailByIdApi,
   recognizeImageTagsApi,
-  uploadImagesApi,
+  uploadImageSearchApi,
 } from '../../services/item.api'
 import { listTagsApi } from '../../services/tag.api'
 
@@ -21,6 +21,7 @@ const TXT = {
   cardTitle: '卡证专区',
   cardSubtitle: '聚焦证件、号卡等带唯一编号的物品',
   cardSearchPlaceholder: '输入唯一编号/身份证号/学号/卡号',
+  cardImageSearchForbidden: '卡证模式已禁用图搜',
   searchPlaceholder: '搜索关键词 / 地点… 例：雨伞',
   searchLabel: '搜索',
   typeFound: '招领',
@@ -29,7 +30,12 @@ const TXT = {
   timeAll: '全部时间',
   timeDay: '最近24小时',
   timeWeek: '最近7天',
+  timeCustom: '自定义时间段',
+  timeStart: '开始时间',
+  timeEnd: '结束时间',
   imageSearch: '图搜',
+  imageSearchSingleItemHint: '图搜一次只能搜一种物品，请只添加同一物品的图片。',
+  imageSearchUploading: '图搜图片上传中，请稍候…',
   imageSearchActive: '图搜已启用',
   imageSearchCount: '张图片参与检索',
   applyImageSearch: '开始图搜',
@@ -66,6 +72,7 @@ const timeOptions = [
   { label: TXT.timeAll, value: 'all' },
   { label: TXT.timeDay, value: 'day' },
   { label: TXT.timeWeek, value: 'week' },
+  { label: TXT.timeCustom, value: 'custom' },
 ]
 
 const TOKEN_KEY = 'laf_token'
@@ -74,6 +81,8 @@ const route = useRoute()
 
 const selectedType = ref(1)
 const selectedTime = ref('all')
+const customStartTime = ref('')
+const customEndTime = ref('')
 const searchText = ref('')
 const recognizedTags = ref([])
 const sidebarCollapsed = ref(true)
@@ -98,6 +107,7 @@ const syncingFromRoute = ref(false)
 const imageSearchIds = ref([])
 const imageSearchFiles = ref([])
 const activeImageSearchIds = ref([])
+const imageSearchUploading = ref(false)
 
 const parsePositiveInt = (value, fallback) => {
   const parsed = Number.parseInt(value, 10)
@@ -114,7 +124,10 @@ const parseTypeFromQuery = (value) => {
 const applyQueryState = (query) => {
   syncingFromRoute.value = true
   selectedType.value = parseTypeFromQuery(query?.type)
-  selectedTime.value = query?.time === 'day' || query?.time === 'week' ? query.time : 'all'
+  selectedTime.value =
+    query?.time === 'day' || query?.time === 'week' || query?.time === 'custom' ? query.time : 'all'
+  customStartTime.value = typeof query?.ts === 'string' ? query.ts : ''
+  customEndTime.value = typeof query?.te === 'string' ? query.te : ''
   searchText.value = typeof query?.q === 'string' ? query.q : ''
   pageNo.value = parsePositiveInt(query?.page, 1)
   pageSize.value = parsePositiveInt(query?.size, 20)
@@ -128,6 +141,10 @@ const buildQueryState = () => {
   const query = {}
   if (selectedType.value !== 1) query.type = String(selectedType.value)
   if (selectedTime.value !== 'all') query.time = selectedTime.value
+  if (selectedTime.value === 'custom') {
+    if (customStartTime.value) query.ts = customStartTime.value
+    if (customEndTime.value) query.te = customEndTime.value
+  }
   if (searchText.value.trim()) query.q = searchText.value.trim()
   if (pageNo.value !== 1) query.page = String(pageNo.value)
   if (pageSize.value !== 20) query.size = String(pageSize.value)
@@ -287,19 +304,44 @@ const formatDateTime = (value) => {
   }).format(date)
 }
 
+const buildCardAriaLabel = (item) => {
+  const desc = item?.description || TXT.unknown
+  const place = item?.eventPlace || '-'
+  const eventTime = formatDateTime(item?.eventTime)
+  return `${desc}，${TXT.place}：${place}，${TXT.eventTime}：${eventTime}`
+}
+
+const buildCardImageAlt = (item) => {
+  const desc = item?.description || TXT.unknown
+  return `物品图片：${desc}`
+}
+
 const toLocalDateTimeString = (date) => {
   const pad = (num) => String(num).padStart(2, '0')
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
 }
 
+const toSecondPrecisionDateTime = (value) => {
+  if (!value) return null
+  return value.length === 16 ? `${value}:00` : value
+}
+
 const getTimeRange = () => {
   if (selectedTime.value === 'day') {
-    return toLocalDateTimeString(new Date(Date.now() - 24 * 60 * 60 * 1000))
+    return { startTime: toLocalDateTimeString(new Date(Date.now() - 24 * 60 * 60 * 1000)), endTime: null }
   }
   if (selectedTime.value === 'week') {
-    return toLocalDateTimeString(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000))
+    return { startTime: toLocalDateTimeString(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)), endTime: null }
   }
-  return null
+  if (selectedTime.value === 'custom') {
+    const startTime = toSecondPrecisionDateTime(customStartTime.value)
+    const endTime = toSecondPrecisionDateTime(customEndTime.value)
+    if (startTime && endTime && new Date(startTime).getTime() > new Date(endTime).getTime()) {
+      return { invalid: true, startTime: null, endTime: null }
+    }
+    return { startTime, endTime }
+  }
+  return { startTime: null, endTime: null }
 }
 
 
@@ -344,14 +386,19 @@ const fetchItems = async (reset = false) => {
         payload.preciseTagMatch = false
       }
     }
-    if (activeImageSearchIds.value.length > 0) {
+    if (activeImageSearchIds.value.length > 0 && selectedType.value !== 'card') {
       payload.searchDTO = {
         imageIds: activeImageSearchIds.value,
         maxResults: Math.max(20, pageSize.value * 3),
       }
     }
-    const startTime = getTimeRange()
-    if (startTime) payload.startTime = startTime
+    const timeRange = getTimeRange()
+    if (timeRange.invalid) {
+      error.value = '结束时间不能早于开始时间'
+      return
+    }
+    if (timeRange.startTime) payload.startTime = timeRange.startTime
+    if (timeRange.endTime) payload.endTime = timeRange.endTime
     if (appliedTags.value.length && selectedType.value !== 'card') {
       payload.tags = appliedTags.value
       payload.preciseTagMatch = appliedPreciseTagMatch.value
@@ -444,21 +491,29 @@ const onWindowKeydown = (event) => {
 const triggerImageSearch = async (event) => {
   const files = Array.from(event.target.files || [])
   event.target.value = ''
-  if (!files.length) return
+  if (!files.length || imageSearchUploading.value) return
+  if (selectedType.value === 'card') {
+    error.value = TXT.cardImageSearchForbidden
+    return
+  }
   if (!requireLoginForAction()) return
+  imageSearchUploading.value = true
   try {
-    const uploaded = await uploadImagesApi(files)
-    const ids = Array.isArray(uploaded) ? uploaded : []
+    const uploaded = await uploadImageSearchApi(files)
+    const entries = Array.isArray(uploaded) ? uploaded : []
     const existing = new Set(imageSearchIds.value)
     const mergedIds = [...imageSearchIds.value]
     const mergedFiles = [...imageSearchFiles.value]
-    ids.forEach((id, idx) => {
+    entries.forEach((entry, idx) => {
+      const id = Number(entry?.id)
+      if (!Number.isFinite(id)) return
       if (existing.has(id)) return
       existing.add(id)
       mergedIds.push(id)
       mergedFiles.push({
         id,
-        name: files[idx]?.name || `image-${mergedIds.length}`,
+        name: files[idx]?.name || `image-${id}`,
+        url: typeof entry?.url === 'string' ? entry.url : '',
       })
     })
     imageSearchIds.value = mergedIds
@@ -474,10 +529,16 @@ const triggerImageSearch = async (event) => {
     sidebarCollapsed.value = false
   } catch {
     // ignore
+  } finally {
+    imageSearchUploading.value = false
   }
 }
 
 const applyImageSearch = async () => {
+  if (selectedType.value === 'card') {
+    error.value = TXT.cardImageSearchForbidden
+    return
+  }
   activeImageSearchIds.value = [...imageSearchIds.value]
   await fetchItems(true)
 }
@@ -486,7 +547,7 @@ const clearImageSearch = async () => {
   const idsToDelete = [...imageSearchIds.value]
   if (idsToDelete.length > 0) {
     try {
-      await deleteImagesApi(idsToDelete)
+      await deleteImageSearchApi(idsToDelete)
     } catch {
       // ignore
     }
@@ -503,7 +564,7 @@ const removeImageSearchAt = async (index) => {
   const removedId = imageSearchIds.value[index]
   if (removedId != null) {
     try {
-      await deleteImagesApi([removedId])
+      await deleteImageSearchApi([removedId])
     } catch {
       // ignore
     }
@@ -571,9 +632,18 @@ const removePendingTag = (tagName) => {
   pendingTags.value = pendingTags.value.filter((name) => name !== tagName)
 }
 
-const clearPendingTags = () => {
+const clearPendingTags = async () => {
   if (!requireLoginForAction()) return
+  const hasPending = pendingTags.value.length > 0 || pendingPreciseTagMatch.value
+  const hasApplied = appliedTags.value.length > 0 || appliedPreciseTagMatch.value
   pendingTags.value = []
+  pendingPreciseTagMatch.value = false
+  appliedTags.value = []
+  appliedPreciseTagMatch.value = false
+  if (hasPending || hasApplied) {
+    pageNo.value = 1
+    await fetchItems(true)
+  }
 }
 
 const changeTagPage = (nextPage) => {
@@ -612,8 +682,18 @@ const handleTimeChange = (event) => {
   selectedTime.value = event.target.value
 }
 
+const handleCustomTimeChange = () => {
+  if (!requireLoginForAction()) return
+  pageNo.value = 1
+  fetchItems(true)
+}
+
 const handleOpenImagePicker = () => {
   if (!requireLoginForAction()) return
+  if (selectedType.value === 'card') {
+    error.value = TXT.cardImageSearchForbidden
+    return
+  }
   openImagePicker()
 }
 
@@ -683,6 +763,19 @@ let searchTimer
 let tagSearchTimer
 applyQueryState(route.query)
 watch([selectedType, selectedTime], () => fetchItems(true))
+watch(
+  [customStartTime, customEndTime],
+  () => {
+    if (selectedTime.value !== 'custom') return
+    pageNo.value = 1
+    fetchItems(true)
+  },
+)
+watch(selectedType, (value) => {
+  if (value === 'card') {
+    activeImageSearchIds.value = []
+  }
+})
 watch(searchText, () => {
   clearTimeout(searchTimer)
   searchTimer = setTimeout(() => {
@@ -774,13 +867,22 @@ onBeforeUnmount(() => {
             class="hero-image-search"
             :class="{ active: imageSearchIds.length > 0 }"
             type="button"
+            :disabled="selectedType === 'card' || imageSearchUploading"
             @click="handleOpenImagePicker"
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">
               <path d="M4.5 8.5a2 2 0 0 1 2-2h2l1-1.6c.2-.33.56-.54.95-.54h3.1c.39 0 .75.21.95.54l1 1.6h2a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-11a2 2 0 0 1-2-2v-8Z"></path>
               <circle cx="12" cy="12.5" r="3.2"></circle>
             </svg>
-            <span>{{ imageSearchIds.length > 0 ? `${TXT.imageSearch} (${imageSearchIds.length})` : TXT.imageSearch }}</span>
+            <span>
+              {{
+                imageSearchUploading
+                  ? '上传中…'
+                  : imageSearchIds.length > 0
+                    ? `${TXT.imageSearch} (${imageSearchIds.length})`
+                    : TXT.imageSearch
+              }}
+            </span>
           </button>
         </div>
         <div class="hero-tools">
@@ -822,6 +924,16 @@ onBeforeUnmount(() => {
                 </select>
                 <span class="select-caret"></span>
               </div>
+              <div v-if="selectedTime === 'custom'" class="custom-time-range">
+                <label>
+                  <span>{{ TXT.timeStart }}</span>
+                  <input v-model="customStartTime" type="datetime-local" @change="handleCustomTimeChange" />
+                </label>
+                <label>
+                  <span>{{ TXT.timeEnd }}</span>
+                  <input v-model="customEndTime" type="datetime-local" @change="handleCustomTimeChange" />
+                </label>
+              </div>
               <label class="top-page-size-label">
                 {{ TXT.pageSize }}
                 <select class="top-page-size" :value="pageSize" @change="handleItemPageSizeChange">
@@ -837,8 +949,9 @@ onBeforeUnmount(() => {
             {{ TXT.imageHint }}：
             <span v-for="tag in recognizedTags" :key="`tag-${tag}`">#{{ tag }}</span>
           </p>
+          <p v-if="imageSearchUploading" class="tag-hint">{{ TXT.imageSearchUploading }}</p>
           <button
-            v-if="imageSearchIds.length"
+            v-if="imageSearchIds.length && selectedType !== 'card'"
             type="button"
             class="apply-image-search-btn"
             @click="applyImageSearch"
@@ -846,14 +959,14 @@ onBeforeUnmount(() => {
             {{ TXT.applyImageSearch }}
           </button>
           <button
-            v-if="imageSearchIds.length"
+            v-if="imageSearchIds.length && selectedType !== 'card'"
             type="button"
             class="clear-image-search-btn"
             @click="clearImageSearch"
           >
             {{ TXT.clearImageSearch }}
           </button>
-          <section v-if="imageSearchIds.length" class="image-search-active-panel" aria-live="polite">
+          <section v-if="imageSearchIds.length && selectedType !== 'card'" class="image-search-active-panel" aria-live="polite">
             <div class="panel-head">
               <strong>{{ activeImageSearchIds.length ? TXT.imageSearchActive : TXT.imageSearchPending }}</strong>
               <span>{{ imageSearchIds.length }} {{ TXT.imageSearchCount }}</span>
@@ -866,6 +979,7 @@ onBeforeUnmount(() => {
               </li>
             </ul>
           </section>
+          <p v-if="selectedType !== 'card'" class="image-search-guideline">{{ TXT.imageSearchSingleItemHint }}</p>
         </div>
         </header>
 
@@ -885,13 +999,11 @@ onBeforeUnmount(() => {
               :key="item.id"
               class="card"
               type="button"
+              :aria-label="buildCardAriaLabel(item)"
               @click="handleCardClick(item.id)"
             >
-              <div
-                class="cover"
-                :class="{ 'has-cover': item.coverUrl }"
-                :style="item.coverUrl ? { backgroundImage: `url('${item.coverUrl}')` } : {}"
-              ></div>
+              <img v-if="item.coverUrl" :src="item.coverUrl" :alt="buildCardImageAlt(item)" class="cover cover-image" />
+              <div v-else class="cover" aria-hidden="true"></div>
               <div v-if="!imageOnly" class="card-body">
                 <p class="desc">{{ item.description || TXT.unknown }}</p>
                 <div class="meta">
@@ -918,13 +1030,11 @@ onBeforeUnmount(() => {
                     :key="item.id"
                     class="card"
                     type="button"
+                    :aria-label="buildCardAriaLabel(item)"
                     @click="handleCardClick(item.id)"
                   >
-                    <div
-                      class="cover"
-                      :class="{ 'has-cover': item.coverUrl }"
-                      :style="item.coverUrl ? { backgroundImage: `url('${item.coverUrl}')` } : {}"
-                    ></div>
+                    <img v-if="item.coverUrl" :src="item.coverUrl" :alt="buildCardImageAlt(item)" class="cover cover-image" />
+                    <div v-else class="cover" aria-hidden="true"></div>
                     <div v-if="!imageOnly" class="card-body">
                       <p class="desc">{{ item.description || TXT.unknown }}</p>
                       <div class="meta">
@@ -1159,6 +1269,13 @@ onBeforeUnmount(() => {
   box-shadow: 0 0 0 3px rgba(82, 133, 236, 0.26), 0 12px 22px rgba(47, 105, 227, 0.2);
 }
 
+.hero-image-search:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+  transform: none;
+  box-shadow: none;
+}
+
 .hero-tools {
   padding: 1.25rem 1.25rem 1.4rem;
   border-radius: 16px;
@@ -1168,6 +1285,17 @@ onBeforeUnmount(() => {
   display: grid;
   gap: 0.85rem;
   position: relative;
+}
+
+.image-search-guideline {
+  margin: 0.1rem 0 0;
+  padding: 0.48rem 0.66rem;
+  border: 1px dashed #d7dee8;
+  border-radius: 10px;
+  background: #f9fbff;
+  color: #64748b;
+  font-size: 0.8rem;
+  line-height: 1.45;
 }
 
 .search {
@@ -1194,8 +1322,39 @@ onBeforeUnmount(() => {
 .controls-right {
   display: inline-flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 0.55rem;
   justify-self: start;
+}
+
+.custom-time-range {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.custom-time-range label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.76rem;
+  color: #475569;
+}
+
+.custom-time-range input {
+  min-height: 38px;
+  border: 1px solid #d7dee8;
+  border-radius: 999px;
+  background: #f7f9fc;
+  padding: 0 0.72rem;
+  font-size: 0.78rem;
+}
+
+.custom-time-range input:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px var(--focus-ring);
 }
 
 .segmented {
@@ -1417,6 +1576,8 @@ onBeforeUnmount(() => {
   background: #f8fafc;
   color: #334155;
   border-radius: 999px;
+  min-width: 32px;
+  min-height: 32px;
   padding: 0.14rem 0.45rem;
   font-size: 0.72rem;
   cursor: pointer;
@@ -1523,12 +1684,13 @@ onBeforeUnmount(() => {
   border-radius: 10px;
   background: #e5eaf3;
   aspect-ratio: 3 / 4;
-  background-size: cover;
-  background-position: center;
+  overflow: hidden;
 }
 
-.cover.has-cover {
-  background-color: #d2d9e6;
+.cover-image {
+  display: block;
+  object-fit: cover;
+  background: #d2d9e6;
 }
 
 .card-body {
@@ -1793,6 +1955,10 @@ onBeforeUnmount(() => {
     width: 100%;
     display: grid;
     grid-template-columns: 1fr auto;
+  }
+
+  .custom-time-range {
+    grid-column: 1 / -1;
   }
 
   .select-wrap,

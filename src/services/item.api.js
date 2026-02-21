@@ -8,12 +8,28 @@ export function addItemApi(payload) {
   return http.post('/items/add-item', payload)
 }
 
+export function updateItemApi(itemId, payload) {
+  return http.put('/items/update-item', payload, {
+    params: { itemId },
+  })
+}
+
 export function uploadImagesApi(files) {
   const form = new FormData()
   for (const file of files || []) {
     form.append('files', file)
   }
   return http.post('/images/upload', form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
+}
+
+export function uploadImageSearchApi(files) {
+  const form = new FormData()
+  for (const file of files || []) {
+    form.append('files', file)
+  }
+  return http.post('/image-search/upload', form, {
     headers: { 'Content-Type': 'multipart/form-data' },
   })
 }
@@ -38,6 +54,10 @@ export function getImageUrlApi(imageId) {
   return http.get(`/images/url/${imageId}`)
 }
 
+export function getImageIdsByItemIdApi(itemId) {
+  return http.get(`/images/ids/item/${itemId}`)
+}
+
 export function listMyItemsApi(params) {
   return http.get('/items/me', { params })
 }
@@ -60,4 +80,8 @@ export function takeDownItemApi(itemId) {
 
 export function deleteImagesApi(imageIds) {
   return http.delete('/items/images', { data: imageIds })
+}
+
+export function deleteImageSearchApi(imageIds) {
+  return http.delete('/image-search/images', { data: imageIds })
 }
